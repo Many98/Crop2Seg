@@ -8,7 +8,7 @@ from sentinel import sentinel, sentinel_sen2cor, time_series_s2
 
 import subprocess
 
-from global_vars import SENTINEL_PATH_DATASET, SEN2COR
+from src.global_vars import SENTINEL_PATH_DATASET, SEN2COR
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 

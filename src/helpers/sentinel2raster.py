@@ -1,7 +1,6 @@
 import os
 import glob
 import re
-from helpers.utils import progress_bar
 from datetime import datetime
 
 import numpy as np
@@ -13,6 +12,8 @@ from rasterio.warp import calculate_default_transform
 from rasterio.windows import from_bounds
 from rasterio import MemoryFile
 from rasterio import plot
+
+from utils import progress_bar
 
 
 def export_to_tif(func_to_be_decorated):
@@ -617,6 +618,9 @@ def fast_tiling(tile, size):
     Returns
     -------
     tiled: np.ndarray
+
+    # TODO we can now use einops.rearrange instead of this function
+        einops.rearrange(a, 'c (h h1) (w w1) -> (h w) c h1, w1', h1=size, w1=size)
     """
     if not isinstance(tile, np.ndarray):
         raise Exception(f'Tile must be of type numpy.Array')

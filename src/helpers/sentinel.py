@@ -25,9 +25,9 @@ from filelock import FileLock
 import subprocess
 import re
 
-from helpers.utils import distribute_args
+from utils import distribute_args
 
-from global_vars import ODATA_URI, ODATA_RESOURCE, OPENSEARCH_URI, ACCOUNT, PASSWORD, PATH_GENERATED, \
+from src.global_vars import ODATA_URI, ODATA_RESOURCE, OPENSEARCH_URI, ACCOUNT, PASSWORD, \
     SENTINEL_PATH_DATASET, SEN2COR, TILES, DATES, CLOUDS
 
 logging.getLogger().setLevel(logging.INFO)
@@ -189,7 +189,7 @@ def sentinel_download(id_list, json_feed,
     json_feed : dict
         Json response from query.
     path_dataset: str
-        Specifies (path) where to download: SENTINEL_PATH_DATASET, SENTINEL_PATH_DATASET_S1
+        Specifies (path) where to download: SENTINEL_PATH_DATASET
     odata_uri : str
     odata_resource : str
     account : str
@@ -809,7 +809,7 @@ def sentinel_load_json(path_dataset, path_tile):
     return json_feed
 
 
-def sentinel_get_tilebounds(path_tile):
+def sentinel_get_tilebounds(path_tile, tiles_path=SENTINEL_PATH_DATASET):
     """
     Gets the bounding box of a specified tile.
     Works for Sentinel 2 (tiles) and also for Sentinel 1 (products).
@@ -818,6 +818,8 @@ def sentinel_get_tilebounds(path_tile):
     ----------
     path_tile : str
         Relative path in .SAFE format path of a tile.
+    tiles_path: str
+        absolute path to directory where are stored S2 tiles
     Returns
     -------
     bounds : numpy.array
@@ -827,7 +829,7 @@ def sentinel_get_tilebounds(path_tile):
 
     # CALCULATE BOUNDS FOR SENTINEL 2 TILES
     if path_tile.startswith('S2'):
-        path = os.path.join(SENTINEL_PATH_DATASET, path_tile, 'GRANULE')
+        path = os.path.join(tiles_path, path_tile, 'GRANULE')
         path = os.path.join(path, os.listdir(path)[0], 'IMG_DATA')
 
         path = os.path.join(path, 'R10m')
@@ -840,15 +842,15 @@ def sentinel_get_tilebounds(path_tile):
         # FIRSTLY APPLY RE-PROJECTION TO EPSG:32633
         sentinel1_reproject_data(path_tile)
 
-        path = os.path.join(SENTINEL_PATH_DATASET, path_tile, 'measurement')
+        path = os.path.join(tiles_path, path_tile, 'measurement')
         tif = [os.path.join(path, f) for f in os.listdir(path) if len(f.split('-')) == 10][0]
 
         bounds = np.array(rasterio.open(tif).bounds).astype('int')
     return bounds
 
 
-def sentinel_load_mask(path_tile, path_dataset=SENTINEL_PATH_DATASET, mask_type='CLOUDS', out_resolution=20,
-                       return_reader=False, where_to_export=PATH_GENERATED):
+def sentinel_load_mask(path_tile, where_to_export, path_dataset=SENTINEL_PATH_DATASET, mask_type='CLOUDS', out_resolution=20,
+                       return_reader=False):
     """
     Loads specified mask for L1C or L2A and returns np.array representation of this mask in specified resolution
     (rows x columns)
@@ -859,7 +861,7 @@ def sentinel_load_mask(path_tile, path_dataset=SENTINEL_PATH_DATASET, mask_type=
     Parameters
     ----------
     where_to_export: str
-        Specifies path where to store generated masks. (PATH_GENERATED)
+        Specifies path where to store generated masks.
     return_reader : bool
         Specifies if channel should be returned as raster reader in mode 'r'
         default is False
@@ -896,7 +898,7 @@ def sentinel_load_mask(path_tile, path_dataset=SENTINEL_PATH_DATASET, mask_type=
             print(f"Creation of the directory {where_to_export} failed")
 
     #  IF MASK IS NOT ALREADY GENERATED
-    if not os.path.isfile(os.path.join(PATH_GENERATED, f'{name_tile}{"_" + name}.tif')):
+    if not os.path.isfile(os.path.join(where_to_export, f'{name_tile}{"_" + name}.tif')):
 
         # POLYGONS REPRESENT CLOUDS, NODATA REGIONS ETC.
         polygons = []
@@ -943,10 +945,10 @@ def sentinel_load_mask(path_tile, path_dataset=SENTINEL_PATH_DATASET, mask_type=
                           dtype=np.uint32)
             # CREATES GEOTIFF FULL OF ONES BECAUSE RASTERIO.MASK.MASK REQUIRES RASTER READER IN 'R' MODE
             export_to_geotif(arr, path_tile, out_resolution='R' + str(out_resolution) + 'm',
-                             where_to_export=PATH_GENERATED,
+                             where_to_export=where_to_export,
                              name=mask_type + '_mask_' + 'R' + str(out_resolution) + 'm')
 
-            band = rasterio.open(os.path.join(PATH_GENERATED, f'{name_tile}{"_" + name}.tif'))
+            band = rasterio.open(os.path.join(where_to_export, f'{name_tile}{"_" + name}.tif'))
             out_image, out_transform = rasterio.mask.mask(band, polygons, filled=True)
 
             # CLOSE THE SOCKET
@@ -954,17 +956,17 @@ def sentinel_load_mask(path_tile, path_dataset=SENTINEL_PATH_DATASET, mask_type=
 
         # FINALLY EXPORT MASK TO GEOTIFF FORMAT
         export_to_geotif(out_image, path_tile, out_resolution='R' + str(out_resolution) + 'm',
-                         where_to_export=PATH_GENERATED, name=mask_type + '_mask_' + 'R' + str(out_resolution) + 'm')
+                         where_to_export=where_to_export, name=mask_type + '_mask_' + 'R' + str(out_resolution) + 'm')
     arrs = []
     if return_reader:
-        arrs.append(rasterio.open(os.path.join(PATH_GENERATED, f'{name_tile}{"_" + name}.tif')))
+        arrs.append(rasterio.open(os.path.join(where_to_export, f'{name_tile}{"_" + name}.tif')))
     else:
-        out_image = rasterio.open(os.path.join(PATH_GENERATED, f'{name_tile}{"_" + name}.tif')).read()
+        out_image = rasterio.open(os.path.join(where_to_export, f'{name_tile}{"_" + name}.tif')).read()
 
     return out_image if not return_reader else arrs
 
 
-def sentinel1_reproject_data(path_tile):
+def sentinel1_reproject_data(path_tile, tiles_path=SENTINEL_PATH_DATASET):
     """
     Applies reprojection to EPSG:32633 to Sentinel 1 tiffs.
 
@@ -974,9 +976,11 @@ def sentinel1_reproject_data(path_tile):
     ----------
     path_tile : str
         Relative path in .SAFE format path of a tile (Sentinel 1).
+    tiles_path: str
+        absolute path to directory where are stored S1 tiles
 
     """
-    a = os.path.join(SENTINEL_PATH_DATASET, path_tile, 'measurement')
+    a = os.path.join(tiles_path, path_tile, 'measurement')
 
     tifs_utm = [os.path.join(a, f) for f in os.listdir(a) if len(f.split('-')) == 10]
     tifs_not_reprojected = [(os.path.join(a, f), f) for f in os.listdir(a) if len(f.split('-')) == 9]
@@ -1107,8 +1111,8 @@ def sentinel_crop_shape(tile, shape, output_as_list=True, all_touched=True):
     return shape_trimmed if output_as_list else np.ma.array(shape_trimmed)
 
 
-def export_to_geotif(img, path_tile, path_dataset=SENTINEL_PATH_DATASET, out_resolution='R20m',
-                     where_to_export=PATH_GENERATED, name='unknown', normalize=False, norm=cv2.NORM_MINMAX,
+def export_to_geotif(img, path_tile, where_to_export, path_dataset=SENTINEL_PATH_DATASET, out_resolution='R20m',
+                     name='unknown', normalize=False, norm=cv2.NORM_MINMAX,
                      alpha=0, beta=10000, return_reader=False):
     """
     Exports calculated index to geotif image format.
@@ -1188,7 +1192,7 @@ def export_to_geotif(img, path_tile, path_dataset=SENTINEL_PATH_DATASET, out_res
         return exported
 
 
-def merge_bands(path_tile, resolution='R20m', path_dataset=SENTINEL_PATH_DATASET, where_to_export=PATH_GENERATED):
+def merge_bands(path_tile, where_to_export, resolution='R20m', path_dataset=SENTINEL_PATH_DATASET):
     """
     Merges bands of tile to one tiff raster.
 
@@ -1231,7 +1235,7 @@ def merge_bands(path_tile, resolution='R20m', path_dataset=SENTINEL_PATH_DATASET
             band.close()
 
 
-def sentinel_load_merged(path_tile, path_dataset=SENTINEL_PATH_DATASET, path_to_save=PATH_GENERATED,
+def sentinel_load_merged(path_tile, path_to_save, path_dataset=SENTINEL_PATH_DATASET,
                          resolution='R20m', return_reader=False):
     """
     Loads merged raster containing merged bands from particular tile.
@@ -1358,7 +1362,7 @@ def sentinel2_overpasses(aoi=(19.59, 49.90, 20.33, 50.21), days_after=7,
     return final_data
 
 
-def time_series_s2(count, producttype='S2MSI1C'):
+def time_series_s2(count, producttype='S2MSI1C', path_to_save=SENTINEL_PATH_DATASET):
     """
     Auxiliary function for downloading time series of Sentinel-2 tiles
     See config file to set specific CLOUD percentages, TILES and DATES
@@ -1382,27 +1386,8 @@ def time_series_s2(count, producttype='S2MSI1C'):
                 # DOWNLOAD L1C because in 2018 there was lack of L2A tiles and also we can use most recent version
                 sentinel(polygon=None, tile_name=tile, platformname='Sentinel-2', producttype=producttype, count=count,
                          beginposition=date,
-                         cloudcoverpercentage=f'[0 TO {cloud}]', path_to_save=SENTINEL_PATH_DATASET)
+                         cloudcoverpercentage=f'[0 TO {cloud}]', path_to_save=path_to_save)
             except RuntimeError as e:
                 print(e.__str__())
                 print(f'Skipping date:tile {date}:{tile}')
                 continue
-
-
-# proposals to work with sentinel1
-'''
-
-        
-def time_series_s1(count):
-
-    
-    # DOWNLOAD SENTINEL 1  (GRD IN IW AQUISITION MODE ) TILES WITHIN GIVE TIME RANGE
-    # optionaly according to filename GRDH h means high resolution 10x10m
-    # then we will mosaic them together https://automating-gis-processes.github.io/CSC18/lessons/L6/raster-mosaic.html
-    sentinel(polygon=None, tile_name=tile, platformname='Sentinel-1', producttype='GRD',
-             sensoroperationalmode='IW', count=count,
-             beginposition=date,
-             path_to_save=SENTINEL_PATH_DATASET_S1)
-    
-'''
-
