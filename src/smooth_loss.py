@@ -18,6 +18,8 @@ class SmoothCrossEntropy2D(CrossEntropyLoss):
     def forward(self, input: Tensor, target: Tensor) -> Tensor:
         # input is expected of shape B x N_CLASSES x H x W
         # target is expected of shape B x H x W ... containing labels corresponding to classes
+        assert input.dim() == 4, '`input` is expected to have 4 dimensions (B x N_CLASSES x H x W)'
+        assert target.dim() == 3, '`target` is expected to have 3 dimensions (B x H x W)'
 
         # cc = (np.arange(v.max()) == v[...,None]-1).astype(int).transpose(2, 0, 1)  -> one hot
         # ot just cc = torch.nn.functional.one_hot(v).permute(2, 0, 1)
@@ -33,7 +35,7 @@ class SmoothCrossEntropy2D(CrossEntropyLoss):
 
         # we will need to this on the fly in loss func
 
-        one_hot_target = F.one_hot(target.long(), num_classes=input.shape[1]).permute(2, 0, 1)
+        one_hot_target = F.one_hot(target.long(), num_classes=input.shape[1]).permute(0, 3, 1, 2)
 
         # 4-connectivity
         weights = torch.tensor([[0., 1., 0.],
@@ -48,9 +50,9 @@ class SmoothCrossEntropy2D(CrossEntropyLoss):
 
         eps = self.ls / input.shape[1]
 
-        exp_small = eps * (input.shape[1] - dilated.sum(0))
-        exp_large = (1 - exp_small) / dilated.sum(0)
+        exp_small = eps * (input.shape[1] - dilated.sum(1)) #(input.shape[1] - dilated.sum(0))
+        exp_large = (1 - exp_small) / dilated.sum(1) #dilated.sum(0)
 
-        target = torch.where(dilated == 1, exp_large, eps)
+        target = torch.where(dilated.permute(1, 0, 2, 3) == 1, exp_large, eps).permute(1, 0, 2, 3)
 
         return self.forward(input, target)
