@@ -13,7 +13,7 @@ from rasterio.windows import from_bounds
 from rasterio import MemoryFile
 from rasterio import plot
 
-from utils import progress_bar
+from src.helpers.utils import progress_bar
 
 
 def export_to_tif(func_to_be_decorated):
