@@ -1,6 +1,6 @@
 import pickle
 import os
-from typing import List, Tuple
+from typing import List, Tuple, Union
 
 import pandas as pd
 from tqdm.auto import tqdm
@@ -14,17 +14,15 @@ import time
 from datetime import datetime
 from einops import rearrange
 
-from sentinel2raster import fast_tiling, Sentinel2Raster
+import logging
 
-from src.global_vars import SENTINEL_PATH_DATASET, AGRI_PATH_DATASET
+from src.helpers.sentinel2raster import Sentinel2Raster, tile_coordinates, export_to_tif
+from src.helpers.sentinel import sentinel
 
+from src.global_vars import SENTINEL_PATH_DATASET, AGRI_PATH_DATASET, DATES, CLOUDS, TILES
 
-# we have raster
+logging.getLogger().setLevel(logging.INFO)
 
-# dataset for pretraining -> we need to download data and
-# then create dataset by loading each tile remove some bands and patchify it to 128x128 pixels
-
-# dataset for fine-tuning -> we need to download data for czech republic ... handled somewhere else
 
 # TODO it should be processed slightly different for pretrain dataset, probably iterate using DatasetCreator via subdirs
 #  containing different timeseries
@@ -32,9 +30,9 @@ from src.global_vars import SENTINEL_PATH_DATASET, AGRI_PATH_DATASET
 
 class DatasetCreator(object):
     """
-    Creates time-series dataset of Sentinel-2 tiles (patches) of shape T x C+T x H x W.
-        C - all S2 bands except B01, B09, B10
-        (+T is because there is also scene classification mask after  bands)
+    Creates time-series dataset of Sentinel-2 tiles (patches) of shape T x C x H x W.
+        C - all S2 bands except B01, B09, B10 i.e. 10 bands
+        T  is dependent on tile
         H=W=128 pixels
     Currently only for Sentinel 2 tiles L2A.
 
@@ -43,7 +41,7 @@ class DatasetCreator(object):
     def __init__(self, output_dataset_path: str, features_path: str = AGRI_PATH_DATASET,
                  tiles_path: str = SENTINEL_PATH_DATASET,
                  for_pretraining: bool = False,
-                 class_mapping: dict = {0: 'nodata', 15: 'unknown'}):
+                 class_mapping: dict = {0: 'Background', 15: 'Unknown'}):
         """
 
         Parameters
@@ -69,23 +67,27 @@ class DatasetCreator(object):
 
         os.makedirs(self.out_path, exist_ok=True)
 
-        if not self.for_pretraining:
-            self.data_s2_path = os.path.join(self.out_path, 'DATA_S2')
-            os.makedirs(self.data_s2_path, exist_ok=True)
+        self.data_s2_path = os.path.join(self.out_path, 'DATA_S2')
+        os.makedirs(self.data_s2_path, exist_ok=True)
 
+        if not self.for_pretraining:
             self.segmentation_path = os.path.join(self.out_path, 'ANNOTATIONS')
             os.makedirs(self.segmentation_path, exist_ok=True)
 
         # TODO create also structure for PRETRAIN DATASET
+        # TODO when creating pretrain dataset there must be another structure of `tiles_path` e.g. subdirectory
+        #  for every time-series
+
+        self.features = None
 
         self.additional_classes = class_mapping  # TODO specify it more correctly
 
         if os.path.isfile(os.path.join(self.out_path, 'metadata.json')):
-            self.metadata = pd.read_json(os.path.join(self.out_path, 'metadata.json'))
+            self.metadata = DatasetCreator.load_metadata(os.path.join(self.out_path, 'metadata.json'))
         else:
             self.metadata = pd.DataFrame({'ID_PATCH': [], 'ID_WITHIN_TILE': [], 'Patch_Cover': [], 'Nodata_Cover': [],
-                                          'Snow_Cloud_Cover': [], 'TILE': [], 'dates-S2': [], 'Fold': [],
-                                          'Status': []})
+                                          'Snow_Cloud_Cover': [], 'TILE': [], 'dates-S2': [], 'crs': [], 'affine': [],
+                                          'Fold': [], 'Status': []})
 
     def __call__(self, *args, **kwargs):
         """
@@ -99,29 +101,34 @@ class DatasetCreator(object):
         -------
 
         """
-        tile_names = []
+        tile_names = TILES
 
-        # TODO adjust it work with information from loaded metadata.json (e.g. if error occured)
         for id, tile_name in enumerate(tile_names):
 
-            self._download_timeseries(tile_name)
+            # sanity check ... skip if there are already exported metadata (it means data should be also exported)
+            if self.metadata[self.metadata['TILE'] == tile_name]['TILE'].shape[0] == 82 * 82:
+                continue
 
-            time_series, bboxes, file_names, dates = self._load_s2(tile_name)  # T x (C+1) x H x W
+            self._download_timeseries(tile_name)  # TODO this will not work for PRETRAIN DATASET ... another dir struct
+
+            time_series, bbox, affine, crs, file_names, dates = self._load_s2(tile_name)  # T x (C+1) x H x W
 
             time_series = self._preprocess(time_series)  # T x (C+1) x H x W
 
             if not self.for_pretraining:
-                segmentation_mask = self._create_segmentation(time_series, bboxes)  # H x W
-                patches_segment = self._patchify(segmentation_mask)  # NUM_PATCHES x PATCH_SIZE x PATCH_SIZE
+                segmentation_mask = self._create_segmentation(time_series, bbox)  # H x W
+                patches_segment, _ = self._patchify(segmentation_mask, affine)  # NUM_PATCHES x PATCH_SIZE x PATCH_SIZE
 
-            patches_s2 = self._patchify(time_series)  # NUM_PATCHES x T x C+1 x PATCH_SIZE x PATCH_SIZE
+            patches_s2, patches_affine = self._patchify(time_series,
+                                                        affine)  # NUM_PATCHES x T x C+1 x PATCH_SIZE x PATCH_SIZE
 
             patches_bool_map, nodata_cover, snow_cloud_cover, patch_cover = self._postprocess_s2(patches_s2)
 
             if not self.for_pretraining:
-                patches_bool_map, patch_cover = self._postprocess_segmentation(patches_segment)
+                # NOTE that we set as valid only those patches which have background pixels percentage <= 0.7
+                patches_bool_map, patch_cover = self._postprocess_segmentation(patches_segment, 0.7)
 
-            # we do not save scene classification
+            # we do not save scene classification, it was only used to get number of nodata_pixels and snow&cloud pixels
             self._save_patches(patches_s2[:, :, :-1, ...], patches_bool_map, where=self.data_s2_path,
                                filename=f'S2_{tile_name}', id=id)
 
@@ -129,11 +136,30 @@ class DatasetCreator(object):
                 self._save_patches(patches_segment, patches_bool_map, where=self.segmentation_path,
                                    filename=f'TARGET_{tile_name}', id=id)
 
-            self._update_metadata(id, tile_name, dates, patches_bool_map, nodata_cover, snow_cloud_cover, patch_cover)
+            self._update_metadata(id, tile_name, dates, crs, patches_affine, patches_bool_map, nodata_cover,
+                                  snow_cloud_cover, patch_cover)
 
         if not self.for_pretraining:
             self._generate_folds()
         self._generate_normalization()
+
+    @staticmethod
+    def load_metadata(metadata_path: str) -> pd.DataFrame:
+        """
+        static method to load metadata json file
+        located at `metadata_path`
+        Parameters
+        -----------
+        metadata_path: str
+            Absolute path to metadata.json file
+        Returns
+        ---------
+            pd.DataFrame representation of metadata
+        """
+        assert 'metadata.json' in metadata_path, '`metadata_path` is expected to have filename `metadata.json`'
+        assert os.path.isfile(metadata_path), '`metadata_path` is now valid path'
+
+        return pd.read_json(metadata_path, orient='index')
 
     def _download_timeseries(self, tile_name: str) -> None:
         """
@@ -147,10 +173,19 @@ class DatasetCreator(object):
         -------
 
         """
-        pass
+        for cloud, date in zip(CLOUDS, DATES):
+            try:
+                sentinel(polygon=None, tile_name=tile_name, platformname='Sentinel-2', producttype='S2MSI2A',
+                         count=5,
+                         beginposition=date,
+                         cloudcoverpercentage=f'[0 TO {cloud}]', path_to_save=self.tiles_path)
+            except RuntimeError as e:
+                logging.info(e.__str__())
+                logging.info(f'Skipping date:tile {date}:{tile_name}')
+                continue
 
-    def _patchify(self, data: np.ndarray,
-                  patch_size: int = 128) -> np.ndarray:
+    def _patchify(self, data: np.ndarray, affine: rasterio.Affine,
+                  patch_size: int = 128) -> Tuple[np.ndarray, list]:
         """
         Auxiliary method to patchify `time-series` to patches of size `patch_size x patch_size`
         i.e. input should be of shape T x C+1 x H x W and output of shape NUM_PATCHES x T x C+1 x PATCH_SIZE x PATCH_SIZE
@@ -158,27 +193,88 @@ class DatasetCreator(object):
         ----------
         data: np.ndarray
             time-series of Sentinel 2 L2A raw data of shape T x C+1 x H x W
+        affine: rasterio.Affine
+            Affine transform of input raster (tile).
+            We need patchify it properly too
         Returns
         -------
         NUM_PATCHES x T x C+1 x PATCH_SIZE x PATCH_SIZE
         """
-        # finally perform fasttiling 128x128 try not overlapping
-        # TODO we can use einops instead
-        # TODO note that each tile is overlaped on each side by 4900 m which is 490 pixels
-        #  but we will always take 484 pixels so it will be divisible by 128 which is about to be patch size
-        # T33UVS, T33UWS,  ... go from total left and on right side remove 490 pixels, and take from upper side 490 pixs
+        # NOTE that each tile has shape 10980x10980 but each tile is overlapped on
+        # each side by 4900 m which is 490 pixels
+        # Therefore we will always take 484 pixels so it will be divisible by 128 which is about to be patch size
+        #
+        # T33UVS, T33UWS,  ... go from total left and on right side remove 484 pixels, and take from upper side 484 pixs
         # T33UUR, T33UVR, T33UWR, T33UXR, T33UYR,
         # T33UUQ, T33UVQ, T33UWQ, T33UXQ, T33UYQ
 
-        assert patch_size != 128, 'Patch size should be 128'
+        # IT results in 82x82 patches
+
+        assert patch_size == 128, 'Patch size should be 128'
+
+        transform = rasterio.Affine(affine.a, affine.b,
+                                    affine.c,  # (left bbox coordinate) in affine transform can be left unchanged
+                                    affine.d, affine.e,
+                                    affine.f - (affine.a * 484)  # fix (top bbox coordinate)
+                                    )
+
+        coords = tile_coordinates(transform, (10496, 10496), size=patch_size)
 
         cropped = data[484:, :10496]
 
-        # todo do same for segmentation mask, will we save it together or in different file ?
-        # todo what to do with scene clsssification mask
-
         # return rearrange(cropped, 't c (h h1) (w w1) -> (h w) t c h1 w1', h1=128, w1=128)
-        return rearrange(cropped, '... (h h1) (w w1) -> (h w) ... h1 w1', h1=128, w1=128)
+        return rearrange(cropped, '... (h h1) (w w1) -> (h w) ... h1 w1', h1=patch_size, w1=patch_size), \
+               coords
+
+    @staticmethod
+    @export_to_tif
+    def unpatchify(id: int, data: np.array, metadata_path: str, nodata: int = 0, dtype: str = 'uint8',
+                   export: bool = False) -> Tuple[Union[rasterio.io.DatasetReader, rasterio.io.MemoryFile], str]:
+        """
+        Static method to create raster object from input `data` and using information from metadata located
+        at `metadata_path`
+        Parameters
+        ----------
+        id: int
+            Id of patch within self.metadata. It is needed to find proper affine transform and crs
+        data: np.ndarray
+            time-series of Sentinel 2 L2A raw data of shape T x C+1 x H x W
+        metadata_path: str
+            Absolute path to metadata.json file
+        nodata: int
+            Specify how to set nodata in output raster
+        dtype: str
+            Data type string representation for raster.
+            Default is uint8
+        export: bool
+            Whether to export resulting raster. Raster will be exported to directory `export` near to `metadata_path`
+        """
+        metadata = DatasetCreator.load_metadata(metadata_path)
+
+        assert data.ndim == 2, '`data` array is expected to be 2d (matrix)'
+
+        affine = metadata[metadata['ID_PATCH'] == id]['affine'].values[0]
+        crs_ = metadata[metadata['ID_PATCH'] == id]['crs'].values[0]
+
+        profile = {'driver': 'GTiff', 'dtype': dtype, 'nodata': nodata, 'width': data.shape[1],
+                   'height': data.shape[0], 'count': 1,
+                   'crs': rasterio.crs.CRS.from_epsg(crs_),
+                   'transform': rasterio.Affine(affine[0][0], affine[1][0], affine[2][0],
+                                                affine[0][1], affine[1][1], affine[2][1]),
+                   'blockxsize': 128,
+                   'blockysize': 128, 'tiled': True, 'compress': 'lzw'}
+
+        # TODO MemoryFile does not empties /vsim/... -> stop using it ... use just plain np.array accessed via read method
+        #  use NamedTemporaryFile instead https://rasterio.readthedocs.io/en/stable/topics/memory-files.html
+        memfile = rasterio.io.MemoryFile(filename=f'raster_{id}.tif')
+        with memfile.open(**profile) as rdata:
+            rdata.write(data)  # write the data
+            rdata._set_all_descriptions(f'Unpatchified raster. Id: {id}')
+
+        if export:
+            os.makedirs(os.path.join(os.path.split(metadata_path)[0], 'export'), exist_ok=True)
+
+        return memfile.open(), os.path.join(os.path.split(metadata_path)[0], 'export', f'raster_{id}')
 
     def _save_patches(self, data: np.ndarray, bool_map: np.ndarray, where: str, filename: str, id: int) -> None:
         """
@@ -200,7 +296,7 @@ class DatasetCreator(object):
         """
         for i, patch in enumerate(data):
             if bool_map[i]:
-                with open(os.path.join(where, f'{filename}_{i}_{id + i}'), 'wb') as f:
+                with open(os.path.join(where, f'{filename}_{i}_{(id * data.shape[0]) + i}'), 'wb') as f:
                     np.save(f, patch)
 
     def _get_filenames(self, tile_name: str) -> List[str]:
@@ -208,24 +304,31 @@ class DatasetCreator(object):
         Auxiliary method to get all filenames which contains `tile_name`
         Parameters
         ----------
-        tile_name :
-
+        tile_name : str
+            Name of tile
         Returns
         -------
-
+            List of filenames containing `tile_name`
         """
         return [f for f in sorted(os.listdir(self.tiles_path),
                                   key=lambda x: datetime.strptime(x.split('_')[2][:8], '%Y%m%d')) if f.endswith('.SAFE')
                 and f.split('_')[5] == tile_name and f.split('_')[1].endswith('L2A')]
 
-    def _load_s2(self, tile_name: str) -> Tuple[np.ndarray, List[rasterio.coords.BoundingBox], List[str], List[str]]:
+    def _load_s2(self, tile_name: str) -> Tuple[np.ndarray, rasterio.coords.BoundingBox, rasterio.Affine,
+                                                int, List[str], List[str]]:
         """
         Auxiliary method to load time-series corresponding to `tile_name`.
         It also serves for up-sampling to 10m
+        Parameters
+        ----------
+        tile_name : str
+            Name of tile
         Returns
         -------
         extracted time-series array of shape T x (C+1) x H x W
-        and list of bounding boxes
+        and bounding box of one tile
+        and affine transform of one tile
+        and epsg of coordinate reference system of one tile
         and list of filenames
         and list of dates
         """
@@ -237,21 +340,33 @@ class DatasetCreator(object):
 
         rasters = [Sentinel2Raster(f) for f in file_names]
 
-        bboxes = [r.bounds for r in rasters]
+        bbox = rasters[0].bounds
+        crs = rasters[0].crs.to_epsg()
+
+        # check whether CRS is UTM33N (epsg=32633)
+        assert crs == 32633 and rasters[0].crs.to_epsg() == rasters[-1].crs.to_epsg(), 'Expected UTM33N crs'
+
+        affine = rasters[0].transform
         dates = [r.date for r in rasters]
         time_series = [r.read() for r in rasters]
 
-        return np.stack(time_series, axis=0), bboxes, file_names, dates
+        return np.stack(time_series, axis=0), bbox, affine, crs, file_names, dates
 
-    def _load_features(self) -> gpd.GeoDataFrame:
+    def _load_features(self, bbox: rasterio.coords.BoundingBox = None) -> gpd.GeoDataFrame:
         """
-        Auxiliary method to load shapefile of features which will be burned onto rasters
+        Auxiliary method to load shapefile of features which will be burned onto rasters.
+        If bbox is not None then
         Returns
         -------
-        GeodataFrame of features
+        GeodataFrame of (filtered) features
         """
+        if self.features is None:
+            self.features = gpd.read_file(self.features_path)  # it should be .shp file
 
-        return gpd.read_file(self.features_path)  # it should be .shp file
+        assert isinstance(bbox,
+                          rasterio.coords.BoundingBox), 'bbox is expected to be of type `rasterio.coords.BoundingBox`'
+
+        return self.features.cx[bbox.left:bbox.right, bbox.bottom:bbox.top] if bbox is not None else self.features
 
     def _preprocess(self, time_series: np.ndarray) -> np.ndarray:
         """
@@ -266,12 +381,14 @@ class DatasetCreator(object):
         Returns
         -------
         Preprocessed array of Sentinel 2 raw data
+            Bands should be as follows:
+            ['B4, central wavelength 665 nm', 'B3, central wavelength 560 nm', 'B2, central wavelength 490 nm',
+             'B8, central wavelength 842 nm', 'B5, central wavelength 705 nm', 'B6, central wavelength 740 nm',
+             'B7, central wavelength 783 nm', 'B8A, central wavelength 865 nm', 'B11, central wavelength 1610 nm',
+             'B12, central wavelength 2190 nm', 'SCL, Scene Classification'
+             ]
         """
         # remove not needed bands  (remove B01, B09, B10) per tile / B10 is already removed in L2A products
-        # somehow measure number of nodata/cloud pixels  (we can do this later)
-
-        # TODO we need to check if B01, B09 bands are always on 11, 10
-        #  Sentinel2Raster has .descriptions method ...
 
         return time_series[[i for i in range(13) if i not in [10, 11]]]
 
@@ -287,7 +404,7 @@ class DatasetCreator(object):
         -------
             np.ndarray of shape [NUM_PATCHES], nodata_cover [NUM_PATCHES x T], snow_cloud_cover [NUM_PATCHES x T], None
         """
-        pass
+        # NOTE that patch size is 128 => there is 128 ** 2 pixels
         """
         ########################################
                             # CHECK IF IMAGE IS NOT FULL OF NODATA #
@@ -295,36 +412,43 @@ class DatasetCreator(object):
                             # 2000 NON ZERO PIXELS TO PASS         #
                             ########################################
                             if np.count_nonzero(np.where(sub_image['mask'][-1] == 14, 0, 1)) > 1999:
+        
         """
-        return np.ones((time_series.shape[0],), dtype=bool), \
-               np.zeros((time_series.shape[0], time_series.shape[1]), dtype=float), \
-               np.zeros((time_series.shape[0], time_series.shape[1]), dtype=float), None
+        assert time_series.ndim == 5, '`time_series` argument is expected to be of dimension 3, but is of' \
+                                            f'dimension {time_series.ndim}'
+        tt = time_series[:, :, -1, ...]
+        no_data = np.where(tt <= 1, 1, 0)
+        cloud_snow_shadow = np.where((2 <= tt <= 3) | (8 <= tt), 1, 0)
 
-    def _postprocess_segmentation(self, segmentation_mask: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        return np.ones((time_series.shape[0],), dtype=bool), \
+               rearrange(no_data, '... h w -> ... (h w)').sum(-1) / 128 ** 2, \
+               rearrange(cloud_snow_shadow, '... h w -> ... (h w)').sum(-1) / 128 ** 2, None
+
+    def _postprocess_segmentation(self, segmentation_mask: np.ndarray, threshold: float) -> Tuple[np.ndarray, np.ndarray]:
         """
         Auxiliary method to postprocess  `segmentation_mask`
         Calculates patch cover i.e. percentage of pixels different from background class
+        Background pixels is expected to have value set to 0
         Parameters
         ----------
         segmentation_mask : np.ndarray
             Array of shape NUM_PATCHES x PATCH_SIZE x PATCH_SIZE
+        threshold: float
+            Number between 0-1 defining maximal allowed percentage of background pixels
         Returns
         -------
-            np.ndarray, patch_cover [NUM_PATCHES]
+            np.ndarray bool map representing valid patches, patch_cover [NUM_PATCHES]
         """
-        pass
-        """
-        ########################################
-                            # CHECK IF IMAGE IS NOT FULL OF NODATA #
-                            # IN 122X122 IMAGE MUST BE AT LEAST    #
-                            # 2000 NON ZERO PIXELS TO PASS         #
-                            ########################################
-                            if np.count_nonzero(np.where(sub_image['mask'][-1] == 14, 0, 1)) > 1999:
-        """
-        return np.ones((segmentation_mask.shape[0],), dtype=bool), \
-               np.zeros((segmentation_mask.shape[0],), dtype=float)
+        assert segmentation_mask.ndim == 3, '`segmentation_mask` argument is expected to be of dimension 3, but is of' \
+                                            f'dimension {segmentation_mask.ndim}'
 
-    def _update_metadata(self, id: int, tile_name: str, dates: List[str], patches_bool_map: np.ndarray,
+        background = np.where(segmentation_mask == 0, 1, 0)
+        background_percentage = rearrange(background, '... h w -> ... (h w)').sum(-1) / 128 ** 2
+
+        return np.where(background_percentage <= threshold, 1, 0).astype(bool), background_percentage
+
+    def _update_metadata(self, id: int, tile_name: str, dates: List[str], crs: int,
+                         affine: List[rasterio.Affine], patches_bool_map: np.ndarray,
                          nodata_cover: np.ndarray, snow_cloud_cover: np.ndarray, patch_cover: np.ndarray) -> None:
         """
         Auxiliary method to update `self.metadata` DataFrame and `metadata.json` file
@@ -337,6 +461,10 @@ class DatasetCreator(object):
             Name of tile
         dates: List[str]
             sorted list of dates within time series
+        crs: int
+            epsg number of coordinate reference system
+        affine: List[rasterio.Affine]
+            List of affine transforms for every patch
         patches_bool_map: np.ndarray
             Bool map representing valid patches
         nodata_cover: np.ndarray
@@ -348,20 +476,22 @@ class DatasetCreator(object):
         Returns
         -------
         """
-
-        # TODO set Nodata_Cover and Snow_Cloud_Cover
-        update = pd.DataFrame({'ID_PATCH': [id+i for i in range(patches_bool_map.shape[0])],
-                               'ID_WITHIN_TILE': [i for i in range(patches_bool_map.shape[0])],
-                               'Patch_Cover': [p for p in patch_cover],
-                               'Nodata_Cover': [],
-                               'Snow_Cloud_Cover': [],
-                               'TILE': [tile_name for _ in range(patches_bool_map.shape[0])],
-                               'dates-S2': [{str(i): d for i, d in enumerate(dates)} for _ in range(patches_bool_map.shape[0])],
-                               'Fold': [0 for _ in range(patches_bool_map.shape[0])],
-                               'Status': ['OK' if i else 'REMOVED' for i in patches_bool_map]})
+        update = pd.DataFrame(
+            {'ID_PATCH': [(id * patches_bool_map.shape[0]) + i for i in range(patches_bool_map.shape[0])],
+             'ID_WITHIN_TILE': [i for i in range(patches_bool_map.shape[0])],
+             'Patch_Cover': [p for p in patch_cover],
+             'Nodata_Cover': [{str(i): v for i, v in enumerate(p)} for p in nodata_cover],
+             'Snow_Cloud_Cover': [{str(i): v for i, v in enumerate(p)} for p in snow_cloud_cover],
+             'TILE': [tile_name for _ in range(patches_bool_map.shape[0])],
+             'dates-S2': [{str(i): d for i, d in enumerate(dates)} for _ in
+                          range(patches_bool_map.shape[0])],
+             'crs': [crs for _ in range(patches_bool_map.shape[0])],
+             'affine': affine,
+             'Fold': [0 for _ in range(patches_bool_map.shape[0])],
+             'Status': ['OK' if i else 'REMOVED' for i in patches_bool_map]})
 
         self.metadata = self.metadata.append(update)
-        self.metadata.to_json(os.path.join(self.out_path, 'metadata.json'), orient="split")
+        self.metadata.to_json(os.path.join(self.out_path, 'metadata.json'), orient="index")
 
     def _generate_folds(self) -> None:
         """
@@ -408,10 +538,32 @@ class DatasetCreator(object):
         # see compute_norm_vals in dataset.py
         pass
 
-    def _create_segmentation(self,  # time_series: np.ndarray,
-                             bboxes: List[rasterio.coords.BoundingBox]) -> np.ndarray:
+    def _create_segmentation(self, time_series: np.ndarray,
+                             bbox: rasterio.coords.BoundingBox) -> np.ndarray:
         """
         Auxiliary method to create segmentation mask for one tile of `time_series`
         Note that it will operate only on one element of time-series.
         Output should be of shape H x W
+
+        steps:
+            load one element/tile of time-series
+            according to tile export features class by class (one additional class must be backround)
+
+            use uint8
+
+        Parameters
+        ----------
+        time_series: np.ndarray
+            Array of time-series of shape T x C+1 x H x W
+        bbox: rasterio.coords.BoundingBox
+            Bounding box of tile for filtering shapefile/geopandas
+        Returns
+        -------
+        Array of shape H x W [uint8] containing segmentation mask
         """
+        # TODO use rasterio.features.rasterize instead of rasterio.mask.mask
+
+        # rasterio.features.rasterize can rasterize features
+        # on the other hand rasterio.mask.mask can be used to mask on raster
+
+        pass
