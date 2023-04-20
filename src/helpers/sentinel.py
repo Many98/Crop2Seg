@@ -237,7 +237,7 @@ def sentinel_download(id_list, json_feed,
                         pbar.update(len(chunk))
                         f.write(chunk)
         except requests.exceptions.HTTPError as e:
-            print(f'Http error occurred with response {e.response}')
+            logging.info(f'Http error occurred with response {e.response}')
 
 
 def sentinel_unzip(path_dataset=SENTINEL_PATH_DATASET):
@@ -531,7 +531,7 @@ def sentinel_sen2cor(path_dataset=SENTINEL_PATH_DATASET, n_jobs=15, inplace=True
                     try:
                         shutil.rmtree(tile)
                     except OSError as e:
-                        print(f"Error: {tile} : {e.strerror}")
+                        logging.info(f"Error: {tile} : {e.strerror}")
                         with FileLock("log.txt.lock"):
                             with open("log.txt", "a") as f:
                                 f.write(f"Error deleting: {tile} : {e.strerror}")
@@ -895,7 +895,7 @@ def sentinel_load_mask(path_tile, where_to_export, path_dataset=SENTINEL_PATH_DA
         try:
             os.mkdir(where_to_export)
         except OSError:
-            print(f"Creation of the directory {where_to_export} failed")
+            logging.info(f"Creation of the directory {where_to_export} failed")
 
     #  IF MASK IS NOT ALREADY GENERATED
     if not os.path.isfile(os.path.join(where_to_export, f'{name_tile}{"_" + name}.tif')):
@@ -1151,7 +1151,7 @@ def export_to_geotif(img, path_tile, where_to_export, path_dataset=SENTINEL_PATH
         try:
             os.mkdir(where_to_export)
         except OSError:
-            print(f"Creation of the directory {where_to_export} failed")
+            logging.info(f"Creation of the directory {where_to_export} failed")
 
     if normalize:
         # PERFORM NORMALIZATION
@@ -1388,6 +1388,6 @@ def time_series_s2(count, producttype='S2MSI1C', path_to_save=SENTINEL_PATH_DATA
                          beginposition=date,
                          cloudcoverpercentage=f'[0 TO {cloud}]', path_to_save=path_to_save)
             except RuntimeError as e:
-                print(e.__str__())
-                print(f'Skipping date:tile {date}:{tile}')
+                logging.info(e.__str__())
+                logging.info(f'Skipping date:tile {date}:{tile}')
                 continue
