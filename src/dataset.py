@@ -1,12 +1,15 @@
 import json
 import os
 from datetime import datetime
+import logging
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import torch
 import torch.utils.data as tdata
+
+logging.getLogger().setLevel(logging.INFO)
 
 
 class PASTIS_Dataset(tdata.Dataset):
@@ -87,7 +90,7 @@ class PASTIS_Dataset(tdata.Dataset):
         self.sats = sats
 
         # Get metadata
-        print("Reading patch metadata . . .")
+        logging.info("Reading patch metadata . . .")
         self.meta_patch = gpd.read_file(os.path.join(folder, "metadata.geojson"))
         self.meta_patch.index = self.meta_patch["ID_PATCH"].astype(int)
         self.meta_patch.sort_index(inplace=True)
@@ -127,7 +130,7 @@ class PASTIS_Dataset(tdata.Dataset):
                 for index, d in date_table.to_dict(orient="index").items()
             }
 
-        print("Done.")
+        logging.info("Done.")
 
         # Select Fold samples
         if folds is not None:
@@ -156,7 +159,7 @@ class PASTIS_Dataset(tdata.Dataset):
                 )
         else:
             self.norm = None
-        print("Dataset ready.")
+        logging.info("Dataset ready.")
 
     def __len__(self):
         return self.len
@@ -323,7 +326,7 @@ def compute_norm_vals(folder, sat):
         means = []
         stds = []
         for i, b in enumerate(dt):
-            print("{}/{}".format(i, len(dt)), end="\r")
+            logging.info("{}/{}".format(i, len(dt)), end="\r")
             data = b[0][0][sat]  # T x C x H x W
             data = data.permute(1, 0, 2, 3).contiguous()  # C x B x T x H x W
             means.append(data.view(data.shape[0], -1).mean(dim=-1).numpy())
