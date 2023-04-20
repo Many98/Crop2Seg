@@ -13,7 +13,11 @@ from rasterio.windows import from_bounds
 from rasterio import MemoryFile
 from rasterio import plot
 
+import logging
+
 from src.helpers.utils import progress_bar
+
+logging.getLogger().setLevel(logging.INFO)
 
 
 def export_to_tif(func_to_be_decorated):
@@ -26,7 +30,7 @@ def export_to_tif(func_to_be_decorated):
                 with rasterio.open(path_to_export, 'w', **profile) as dst:
                     dst.write(raster_reader.read())
             else:
-                print(f'There already is file with given path `{path_to_export}`')
+                logging.info(f'There already is file with given path `{path_to_export}`')
             raster_reader.close()
             return path_to_export
         return raster_reader
@@ -55,7 +59,7 @@ def check_raster(raster_file, consider_S2R=False):
                 src = rasterio.open(raster_file)
 
             except rasterio.errors.RasterioError as e:
-                print(e)
+                logging.info(e)
     elif isinstance(raster_file, rasterio.io.DatasetReader) or isinstance(raster_file, rasterio.vrt.WarpedVRT):
         if not raster_file.closed:
             src = raster_file
@@ -146,7 +150,7 @@ class Sentinel2Raster(object):
         if self._data is None:
             self._data = self.__2raster()
             # self.__property_reader = self.data
-        print(f'Reading {self.tile_name}_{self.date} ...')
+        logging.info(f'Reading {self.tile_name}_{self.date} ...')
         if isinstance(channel, list):
             channel = np.array(channel)
         elif channel is None:
@@ -356,7 +360,7 @@ class Sentinel2Raster(object):
                     final_raster_description = final_raster_description + ['SCL Scene classification']
                 progress_bar(j=8, count=12, prefix=f'Loading {self.tile_name}_{self.date} into memory')
             else:
-                print(f'No scene classification raster found')
+                logging.info(f'No scene classification raster found')
 
         final_raster_array = np.concatenate(final_raster_array, axis=0)
         final_raster_profile.update(driver='GTiff', count=final_raster_array.shape[0], compress='lzw',
@@ -522,7 +526,7 @@ def normalized_difference_index(raster_file, band1, band2, min_max=(0, 10000), e
         bands_array = np.where((mask_array == 4) | (mask_array == 5) | (mask_array == 6) | (mask_array == 7),
                                bands_array, 0).astype('float32')
     else:
-        print('Mask of raster not found. Resulting index can contain invalid values')
+        logging.info('Mask of raster not found. Resulting index can contain invalid values')
 
     np.seterr(divide='ignore', invalid='ignore')
     index = np.where(bands_array[0] + bands_array[1] == 0., -2.0,
