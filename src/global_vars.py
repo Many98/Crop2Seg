@@ -31,13 +31,6 @@ SENTINEL_PATH_DATASET = conf['sentinel']['path_dataset']  # WHERE ARE STORED SEN
 #####################################
 AGRI_PATH_DATASET = conf['agri']['path_dataset']  # SHAPEFILE OF AGRICULTURE FIELDS (ONLY)
 
-##################################
-# HYPERPARAMETERS FOR NEURAL NET #
-##################################
-INIT_LR = float(conf['network']['init_lr'])  # initial learning rate
-BATCH_SIZE = int(conf['network']['batch_size'])
-EPOCHS = int(conf['network']['epochs'])
-
 ####################
 # SET RANDOM STATE #
 ####################
