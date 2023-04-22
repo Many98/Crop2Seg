@@ -116,7 +116,7 @@ class DatasetCreator(object):
             time_series = self._preprocess(time_series)  # T x (C+1) x H x W
 
             if not self.for_pretraining:
-                segmentation_mask = self._create_segmentation(time_series, bbox)  # H x W
+                segmentation_mask = self._create_segmentation(time_series.shape[-2:], affine, bbox)  # H x W
                 patches_segment, _ = self._patchify(segmentation_mask, affine)  # NUM_PATCHES x PATCH_SIZE x PATCH_SIZE
 
             patches_s2, patches_affine = self._patchify(time_series,
@@ -157,7 +157,7 @@ class DatasetCreator(object):
             pd.DataFrame representation of metadata
         """
         assert 'metadata.json' in metadata_path, '`metadata_path` is expected to have filename `metadata.json`'
-        assert os.path.isfile(metadata_path), '`metadata_path` is now valid path'
+        assert os.path.isfile(metadata_path), f'`metadata_path` ({metadata_path}) is now valid path'
 
         return pd.read_json(metadata_path, orient='index')
 
@@ -270,6 +270,9 @@ class DatasetCreator(object):
         with memfile.open(**profile) as rdata:
             rdata.write(data)  # write the data
             rdata._set_all_descriptions(f'Unpatchified raster. Id: {id}')
+
+        # with rasterio.open('example.tif', 'w', **profile) as dst:
+        #         dst.write(data, 1)
 
         if export:
             os.makedirs(os.path.join(os.path.split(metadata_path)[0], 'export'), exist_ok=True)
@@ -405,17 +408,9 @@ class DatasetCreator(object):
             np.ndarray of shape [NUM_PATCHES], nodata_cover [NUM_PATCHES x T], snow_cloud_cover [NUM_PATCHES x T], None
         """
         # NOTE that patch size is 128 => there is 128 ** 2 pixels
-        """
-        ########################################
-                            # CHECK IF IMAGE IS NOT FULL OF NODATA #
-                            # IN 122X122 IMAGE MUST BE AT LEAST    #
-                            # 2000 NON ZERO PIXELS TO PASS         #
-                            ########################################
-                            if np.count_nonzero(np.where(sub_image['mask'][-1] == 14, 0, 1)) > 1999:
-        
-        """
+
         assert time_series.ndim == 5, '`time_series` argument is expected to be of dimension 3, but is of' \
-                                            f'dimension {time_series.ndim}'
+                                      f'dimension {time_series.ndim}'
         tt = time_series[:, :, -1, ...]
         no_data = np.where(tt <= 1, 1, 0)
         cloud_snow_shadow = np.where((2 <= tt <= 3) | (8 <= tt), 1, 0)
@@ -424,7 +419,8 @@ class DatasetCreator(object):
                rearrange(no_data, '... h w -> ... (h w)').sum(-1) / 128 ** 2, \
                rearrange(cloud_snow_shadow, '... h w -> ... (h w)').sum(-1) / 128 ** 2, None
 
-    def _postprocess_segmentation(self, segmentation_mask: np.ndarray, threshold: float) -> Tuple[np.ndarray, np.ndarray]:
+    def _postprocess_segmentation(self, segmentation_mask: np.ndarray, threshold: float) -> Tuple[
+        np.ndarray, np.ndarray]:
         """
         Auxiliary method to postprocess  `segmentation_mask`
         Calculates patch cover i.e. percentage of pixels different from background class
@@ -538,32 +534,40 @@ class DatasetCreator(object):
         # see compute_norm_vals in dataset.py
         pass
 
-    def _create_segmentation(self, time_series: np.ndarray,
+    def _create_segmentation(self, shape: Tuple, affine: rasterio.Affine,
                              bbox: rasterio.coords.BoundingBox) -> np.ndarray:
         """
         Auxiliary method to create segmentation mask for one tile of `time_series`
-        Note that it will operate only on one element of time-series.
         Output should be of shape H x W
-
-        steps:
-            load one element/tile of time-series
-            according to tile export features class by class (one additional class must be backround)
-
-            use uint8
-
         Parameters
         ----------
-        time_series: np.ndarray
-            Array of time-series of shape T x C+1 x H x W
+        shape: tuple
+            Shape of output numpy ndarray
         bbox: rasterio.coords.BoundingBox
             Bounding box of tile for filtering shapefile/geopandas
+        affine: rasterio.Affine
+            affine transform of tile on which segmentation mask is burned
         Returns
         -------
         Array of shape H x W [uint8] containing segmentation mask
         """
-        # TODO use rasterio.features.rasterize instead of rasterio.mask.mask
+        features_ = self._load_features(bbox)
 
-        # rasterio.features.rasterize can rasterize features
-        # on the other hand rasterio.mask.mask can be used to mask on raster
+        assert 'geometry' in features, 'geometry column is expected to be in features GeoDataFrame'
+        assert 'value' in features, 'value column is expected to be in features GeoDataFrame and contain ' \
+                                    'integer classes encoding'
 
-        pass
+        shapes_ = features_[['geometry', 'value']].values.tolist()
+
+        # Note that `shapes_` input geometry must according to documentation implement Python geo interface
+        #  and contain columns `geometry` and `value` which will be burned to output raster
+        return rasterio.features.rasterize(shapes_,
+                                           out_shape=shape,
+                                           fill=0,  # fill value for background
+                                           out=None,
+                                           transform=affine,
+                                           all_touched=False,
+                                           # merge_alg=MergeAlg.replace,  # ... used is default
+                                           default_value=1,
+                                           dtype=rasterio.uint8
+                                           )
