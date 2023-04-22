@@ -143,6 +143,7 @@ def sentinel_query(polygon, opensearch_uri=OPENSEARCH_URI, count=5, account=ACCO
         id_list = []
         tile_type_list = []
         cloud_percentage_list = []
+        snow_percentage_list = []
         size_list = []
         if not 'entry' in json_feed:
             raise RuntimeError('No results, matching set conditions was found. Check if cloud condition is not too.'
@@ -155,19 +156,32 @@ def sentinel_query(polygon, opensearch_uri=OPENSEARCH_URI, count=5, account=ACCO
                 _ = [j for j in json_feed['entry'][i]['str'] if j['name'] == 'size']
                 size = _[0]['content'].split(' ')
                 size_list.append(float(size[0]) if size[1] == 'MB' else float(size[0]) * 1000)
-                cloud_percentage_list.append(float(json_feed['entry'][i]['double']['content']))
+                _ = [j for j in json_feed['entry'][i]['double'] if j['name'] == 'cloudcoverpercentage']
+                cloud_percentage_list.append(float(_[0]['content']))
+                _ = [j for j in json_feed['entry'][i]['double'] if j['name'] == 'snowicepercentage']
+                snow_percentage_list.append(float(_[0]['content']))
                 id_list.append(entry['id'])
 
-            df = pd.DataFrame(list(zip(id_list, tile_type_list, cloud_percentage_list, size_list,
+            df = pd.DataFrame(list(zip(id_list, tile_type_list, cloud_percentage_list, snow_percentage_list, size_list,
                                        [None] * len(id_list))),
-                              columns=['ids', 'types', 'clouds', 'size', 'rank'])
-            # RANK THE PRODUCTS ACCORDING TO CLOUD PERCENTAGE AND SIZE
-            df['rank'] = df.apply(lambda x: rank(x['types'], x['clouds'], x['size']), axis=1)
-            df.sort_values('rank', ascending=False, inplace=True)
+                              columns=['ids', 'types', 'clouds', 'snow', 'size', 'rank'])
+
+            logging.info("Applying snow cover percentage filter (<=40%)")
+            df = df[df['snow'] <= 40]
+            logging.info(f"Left {df.shape[0]}/{int(json_feed['opensearch:totalResults'])} tile candidates")
+
+            if not df.empty:
+                # RANK THE PRODUCTS ACCORDING TO CLOUD PERCENTAGE AND SIZE
+                df['rank'] = df.apply(lambda x: rank(x['types'], x['clouds'], x['size']), axis=1)
+                df.sort_values('rank', ascending=False, inplace=True)
 
             id_list = df.head(count)['ids'].to_list()
         elif type(json_feed['entry']) is dict:
-            id_list.append(json_feed['entry']['id'])  # in this case only one id is in json_feed
+            _ = [j for j in json_feed['entry']['double'] if j['name'] == 'snowicepercentage']
+            if float(_[0]['content']) <= 40:
+                id_list.append(json_feed['entry']['id'])  # in this case only one id is in json_feed
+            else:
+                logging.info(f"Skipping due to high snow cover percentage {float(_[0]['content'])} % > 40%")
 
         total_results = int(json_feed['opensearch:totalResults'])
         logging.info(f'Overall number of results: {total_results}')
@@ -481,8 +495,6 @@ def sentinel(polygon=None, tile_name=None, count=4, platformname='Sentinel-2', p
 
     # FINALLY CALL FUNCTION TO PERFORM SEARCH
     id_list, json_feed, num_results = sentinel_query(polygon, count=count, **args, **kwargs)
-
-    logging.info(f"Displaying uuids of  {num_results if num_results < count else count} results: {id_list} \n.")
 
     # DOWNLOAD TILES
     sentinel_download(id_list, json_feed, path_dataset=path_to_save)
