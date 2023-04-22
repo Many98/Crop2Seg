@@ -1,10 +1,8 @@
-# Crop2Seg
+# Crop2Seg 
 
-`Crop2Seg` is repository for my Master's thesis project.
+- Main goal is to perform semantic segmentation of crop types in time-series of Sentinel-2 tiles in automatic manner
 
-Main goal is to perform semantic segmentation of crop types in time-series of Sentinel-2 tiles in automatic manner
-
-Our area of interest is Czech Republic.
+- Our area of interest is Czech Republic.
 
 ## What is planned
 0. ![example workflow](https://badgen.net/badge/progress/99%25/green) Review methods & models for semantic segmentation of crop types in time-series of satellite images 
@@ -37,7 +35,7 @@ Based on [utae-paps](https://github.com/VSainteuf/utae-paps)
 
 ## Dataset
 
-## TODO
+#### TODO
 
 [Static preview demo of T33UWR tile from 17.2.2019](https://raw.githack.com/Many98/Crop2Seg/main/data/T33UWR_20190217_sample_static.html)
 
