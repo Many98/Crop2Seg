@@ -1,5 +1,6 @@
 import pickle
 import os
+import shutil
 from typing import List, Tuple, Union
 
 import pandas as pd
@@ -7,14 +8,11 @@ from tqdm.auto import tqdm
 import logging
 import numpy as np
 import rasterio
-from rasterio import mask
 import geopandas as gpd
 from rasterio import features
 import time
 from datetime import datetime
 from einops import rearrange
-
-import logging
 
 from src.helpers.sentinel2raster import Sentinel2Raster, tile_coordinates, export_to_tif
 from src.helpers.sentinel import sentinel
@@ -41,7 +39,8 @@ class DatasetCreator(object):
     def __init__(self, output_dataset_path: str, features_path: str = AGRI_PATH_DATASET,
                  tiles_path: str = SENTINEL_PATH_DATASET,
                  for_pretraining: bool = False,
-                 class_mapping: dict = {0: 'Background', 15: 'Unknown'}):
+                 delete_source_tiles: bool = False
+                 ):
         """
 
         Parameters
@@ -49,21 +48,26 @@ class DatasetCreator(object):
         output_dataset_path: str
             Absolute path where will be stored final dataset
         features_path: str
-            Absolute path to shapefile
+            Absolute path to shapefile.
+            Shapefile is expected to have column `value` with integer encoding of classes
+                        and column `geometry` with geometry object (which implements python Geo interface) of shape
+            Note that `0` is reserved for background (nodata) class
         tiles_path: str
             Absolute path to Sentinel 2 L2A tiles (time-series) i.e. all tiles over same area will be used to
             create time-series
         for_pretraining: bool
             Whether to create dataset for pretraining.
             If `for_pretraining=True` it is expected that in `tiles_path` TODO ...
-        class_mapping: dict
-            Specify class mapping used in creation of dataset
+        delete_source_tiles: bool
+            Whether to delete input tiles after time-series per particular tile is generated
         """
         self.tiles_path = tiles_path  # here are stored sentinel 2 tiles
         self.features_path = features_path  # path of dataset where is stored shapefile
         self.out_path = output_dataset_path  # path to output dataset/ where to create dataset
 
         self.for_pretraining = for_pretraining
+
+        self.delete_source = delete_source_tiles
 
         os.makedirs(self.out_path, exist_ok=True)
 
@@ -79,8 +83,6 @@ class DatasetCreator(object):
         #  for every time-series
 
         self.features = None
-
-        self.additional_classes = class_mapping  # TODO specify it more correctly
 
         if os.path.isfile(os.path.join(self.out_path, 'metadata.json')):
             self.metadata = DatasetCreator.load_metadata(os.path.join(self.out_path, 'metadata.json'))
@@ -109,7 +111,7 @@ class DatasetCreator(object):
             if self.metadata[self.metadata['TILE'] == tile_name]['TILE'].shape[0] == 82 * 82:
                 continue
 
-            self._download_timeseries(tile_name)  # TODO this will not work for PRETRAIN DATASET ... another dir struct
+            #self._download_timeseries(tile_name)  # TODO this will not work for PRETRAIN DATASET ... another dir struct
 
             time_series, bbox, affine, crs, file_names, dates = self._load_s2(tile_name)  # T x (C+1) x H x W
 
@@ -139,6 +141,9 @@ class DatasetCreator(object):
             self._update_metadata(id, tile_name, dates, crs, patches_affine, patches_bool_map, nodata_cover,
                                   snow_cloud_cover, patch_cover)
 
+            if self.delete_source:
+                self._delete_tiles(tile_name)
+
         if not self.for_pretraining:
             self._generate_folds()
         self._generate_normalization()
@@ -161,14 +166,26 @@ class DatasetCreator(object):
 
         return pd.read_json(metadata_path, orient='index')
 
+    def _delete_tiles(self, tile_name: str) -> None:
+        """
+        Helper method to delete all tiles with `tile_name`
+        Parameters
+        ----------
+        tile_name : str
+             Name of tile to be downloaded. E.g. T33UVR
+        """
+        file_names = self._get_filenames(tile_name)
+        for f in file_names:
+            shutil.rmtree(os.path.join(self.tiles_path, f))
+
     def _download_timeseries(self, tile_name: str) -> None:
         """
-        auxiliary method to download time-series by `tile_name`
+        Auxiliary method to download time-series by `tile_name`
         It should call `sentinel` etc functions
         Parameters
         ----------
-        tile_name :
-
+        tile_name : str
+            Name of tile to be downloaded. E.g. T33UVR
         Returns
         -------
 
@@ -341,7 +358,7 @@ class DatasetCreator(object):
 
         file_names = self._get_filenames(tile_name)  # filenames sorted according to date
 
-        rasters = [Sentinel2Raster(f) for f in file_names]
+        rasters = [Sentinel2Raster(os.path.join(self.tiles_path, f)) for f in file_names]
 
         bbox = rasters[0].bounds
         crs = rasters[0].crs.to_epsg()
@@ -351,7 +368,15 @@ class DatasetCreator(object):
 
         affine = rasters[0].transform
         dates = [r.date for r in rasters]
-        time_series = [r.read() for r in rasters]
+        logging.info(f"CONSTRUCTING TIME-SERIES FOR {tile_name}")
+
+        logging.getLogger().disabled = True
+        time_series = []
+        for r in tqdm(rasters, desc="Loading rasters..."):
+            time_series.append(r.read())
+        logging.getLogger().disabled = False
+
+        logging.info(f"LENGTH OF TIME-SERIES IS: {len(file_names)}")
 
         return np.stack(time_series, axis=0), bbox, affine, crs, file_names, dates
 
@@ -392,8 +417,9 @@ class DatasetCreator(object):
              ]
         """
         # remove not needed bands  (remove B01, B09, B10) per tile / B10 is already removed in L2A products
-
-        return time_series[[i for i in range(13) if i not in [10, 11]]]
+        assert time_series.ndim == 4, "Time-series is expected to be 4-dimensional [T x C x H x W] array, " \
+                                      f"but `ndim={time_series.ndim}`"
+        return time_series[:, [i for i in range(13) if i not in [10, 11]], ...]
 
     def _postprocess_s2(self, time_series: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, None]:
         """
@@ -571,3 +597,9 @@ class DatasetCreator(object):
                                            default_value=1,
                                            dtype=rasterio.uint8
                                            )
+
+
+if __name__ == "__main__":
+    c = DatasetCreator(output_dataset_path='/disk2/fratrik/test_dataset')
+    c()
+    print('Done')
