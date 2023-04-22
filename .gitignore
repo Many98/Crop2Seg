@@ -2,3 +2,4 @@
 *.pdf
 *token*
 *.ini
+.ipynb_checkpoints
