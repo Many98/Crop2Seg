@@ -8,6 +8,14 @@ from sentinel import sentinel, sentinel_sen2cor, time_series_s2
 
 import subprocess
 
+# ### small boiler plate to add src to sys path
+import sys
+from pathlib import Path
+file = Path(__file__).resolve()
+root = str(file).split('src')[0]
+sys.path.append(root)
+# --------------------------------------
+
 from src.global_vars import SENTINEL_PATH_DATASET, SEN2COR
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)

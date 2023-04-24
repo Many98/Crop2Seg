@@ -27,6 +27,14 @@ import re
 
 from utils import distribute_args
 
+# ### small boiler plate to add src to sys path
+import sys
+from pathlib import Path
+file = Path(__file__).resolve()
+root = str(file).split('src')[0]
+sys.path.append(root)
+# --------------------------------------
+
 from src.global_vars import ODATA_URI, ODATA_RESOURCE, OPENSEARCH_URI, ACCOUNT, PASSWORD, \
     SENTINEL_PATH_DATASET, SEN2COR, TILES, DATES, CLOUDS
 

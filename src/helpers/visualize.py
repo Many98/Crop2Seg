@@ -7,7 +7,15 @@ import tensorboard as tb
 import matplotlib.patches as mpatches
 from skimage.exposure import equalize_hist, adjust_gamma, adjust_log
 
-from confusion_matrix_pretty_print import pretty_plot_confusion_matrix
+# ### small boiler plate to add src to sys path
+import sys
+from pathlib import Path
+file = Path(__file__).resolve()
+root = str(file).split('src')[0]
+sys.path.append(root)
+# --------------------------------------
+
+from src.helpers.confusion_matrix_pretty_print import pretty_plot_confusion_matrix
 
 
 def show(func):
