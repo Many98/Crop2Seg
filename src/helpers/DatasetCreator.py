@@ -1,4 +1,3 @@
-import pickle
 import os
 import shutil
 from typing import List, Tuple, Union
@@ -10,9 +9,20 @@ import numpy as np
 import rasterio
 import geopandas as gpd
 from rasterio import features
-import time
+
+from shapely.geometry import box as shapely_box
+
 from datetime import datetime
 from einops import rearrange
+
+# ### small boiler plate to add src to sys path
+import sys
+from pathlib import Path
+file = Path(__file__).resolve()
+root = str(file).split('src')[0]
+sys.path.append(root)
+# --------------------------------------
+
 
 from src.helpers.sentinel2raster import Sentinel2Raster, tile_coordinates, export_to_tif
 from src.helpers.sentinel import sentinel
@@ -88,8 +98,8 @@ class DatasetCreator(object):
             self.metadata = DatasetCreator.load_metadata(os.path.join(self.out_path, 'metadata.json'))
         else:
             self.metadata = pd.DataFrame({'ID_PATCH': [], 'ID_WITHIN_TILE': [], 'Patch_Cover': [], 'Nodata_Cover': [],
-                                          'Snow_Cloud_Cover': [], 'TILE': [], 'dates-S2': [], 'crs': [], 'affine': [],
-                                          'Fold': [], 'Status': []})
+                                          'Snow_Cloud_Cover': [], 'TILE': [], 'dates-S2': [], 'time-series_length': [],
+                                          'crs': [], 'affine': [], 'Fold': [], 'Status': []})
 
     def __call__(self, *args, **kwargs):
         """
@@ -111,42 +121,52 @@ class DatasetCreator(object):
             if self.metadata[self.metadata['TILE'] == tile_name]['TILE'].shape[0] == 82 * 82:
                 continue
 
-            #self._download_timeseries(tile_name)  # TODO this will not work for PRETRAIN DATASET ... another dir struct
+            # logging.info(f"DOWNLOADING TILES WITH NAME: {tile_name}")
+            # self._download_timeseries(tile_name)  # TODO this will not work for PRETRAIN DATASET ... another dir struct
 
+            logging.info(f"CONSTRUCTING TIME-SERIES FOR TILE: {tile_name}")
             time_series, bbox, affine, crs, file_names, dates = self._load_s2(tile_name)  # T x (C+1) x H x W
+            logging.info(f"LENGTH OF TIME-SERIES IS: {len(file_names)}")
 
             time_series = self._preprocess(time_series)  # T x (C+1) x H x W
 
             if not self.for_pretraining:
+                logging.info(f"GENERATING SEGMENTATION MASK FOR TILE: {tile_name}")
                 segmentation_mask = self._create_segmentation(time_series.shape[-2:], affine, bbox)  # H x W
                 patches_segment, _ = self._patchify(segmentation_mask, affine)  # NUM_PATCHES x PATCH_SIZE x PATCH_SIZE
 
             patches_s2, patches_affine = self._patchify(time_series,
                                                         affine)  # NUM_PATCHES x T x C+1 x PATCH_SIZE x PATCH_SIZE
 
+            logging.info(f"POSTPROCESSING TIME-SERIES FOR TILE: {tile_name}")
             patches_bool_map, nodata_cover, snow_cloud_cover, patch_cover = self._postprocess_s2(patches_s2)
-
             if not self.for_pretraining:
                 # NOTE that we set as valid only those patches which have background pixels percentage <= 0.7
                 patches_bool_map, patch_cover = self._postprocess_segmentation(patches_segment, 0.7)
 
             # we do not save scene classification, it was only used to get number of nodata_pixels and snow&cloud pixels
+            logging.info(f"SAVING TIME-SERIES DATA FOR TILE: {tile_name}")
             self._save_patches(patches_s2[:, :, :-1, ...], patches_bool_map, where=self.data_s2_path,
-                               filename=f'S2_{tile_name}', id=id)
+                               filename=f'S2', id=id)
 
             if not self.for_pretraining:
                 self._save_patches(patches_segment, patches_bool_map, where=self.segmentation_path,
-                                   filename=f'TARGET_{tile_name}', id=id)
+                                   filename=f'TARGET', id=id)
 
+            logging.info(f"UPDATING METADATA FOR PATCHES OF TILE: {tile_name}")
             self._update_metadata(id, tile_name, dates, crs, patches_affine, patches_bool_map, nodata_cover,
                                   snow_cloud_cover, patch_cover)
 
             if self.delete_source:
+                logging.info(f"REMOVING TILES WITH NAME: {tile_name}")
                 self._delete_tiles(tile_name)
 
+            logging.info(f"PATCHES FOR TILE {tile_name} GENERATED SUCCESSFULLY \n"
+                         f"------------------------------------------------------\n\n")
+
         if not self.for_pretraining:
+            logging.info(f"GENERATING RANDOM FOLDS")
             self._generate_folds()
-        self._generate_normalization()
 
     @staticmethod
     def load_metadata(metadata_path: str) -> pd.DataFrame:
@@ -237,7 +257,7 @@ class DatasetCreator(object):
 
         coords = tile_coordinates(transform, (10496, 10496), size=patch_size)
 
-        cropped = data[484:, :10496]
+        cropped = data[..., 484:, :10496]
 
         # return rearrange(cropped, 't c (h h1) (w w1) -> (h w) t c h1 w1', h1=128, w1=128)
         return rearrange(cropped, '... (h h1) (w w1) -> (h w) ... h1 w1', h1=patch_size, w1=patch_size), \
@@ -316,7 +336,7 @@ class DatasetCreator(object):
         """
         for i, patch in enumerate(data):
             if bool_map[i]:
-                with open(os.path.join(where, f'{filename}_{i}_{(id * data.shape[0]) + i}'), 'wb') as f:
+                with open(os.path.join(where, f'{filename}_{(id * data.shape[0]) + i}'), 'wb') as f:
                     np.save(f, patch)
 
     def _get_filenames(self, tile_name: str) -> List[str]:
@@ -368,15 +388,12 @@ class DatasetCreator(object):
 
         affine = rasters[0].transform
         dates = [r.date for r in rasters]
-        logging.info(f"CONSTRUCTING TIME-SERIES FOR {tile_name}")
 
         logging.getLogger().disabled = True
         time_series = []
         for r in tqdm(rasters, desc="Loading rasters..."):
             time_series.append(r.read())
         logging.getLogger().disabled = False
-
-        logging.info(f"LENGTH OF TIME-SERIES IS: {len(file_names)}")
 
         return np.stack(time_series, axis=0), bbox, affine, crs, file_names, dates
 
@@ -389,12 +406,21 @@ class DatasetCreator(object):
         GeodataFrame of (filtered) features
         """
         if self.features is None:
+            logging.info(f"LOADING INPUT FEATURES FROM {self.features_path}")
             self.features = gpd.read_file(self.features_path)  # it should be .shp file
+            logging.info("GENERATING SPATIAL INDEX FOR FEATURES")
+            self.features.sindex
 
         assert isinstance(bbox,
                           rasterio.coords.BoundingBox), 'bbox is expected to be of type `rasterio.coords.BoundingBox`'
+        if bbox is not None:
+            logging.info(f"FILTERING FEATURES DATASET FOR CURRENT EXTENT")
+            indices = self.features.sindex.query(shapely_box(bbox.left, bbox.bottom, bbox.right, bbox.top),
+                                                 predicate='intersects')
+        # return self.features.cx[bbox.left:bbox.right, bbox.bottom:bbox.top] if bbox is not None else self.features
+        # cx method is too slow ... using spatial index instead
 
-        return self.features.cx[bbox.left:bbox.right, bbox.bottom:bbox.top] if bbox is not None else self.features
+        return self.features.iloc[indices] if bbox is not None else self.features
 
     def _preprocess(self, time_series: np.ndarray) -> np.ndarray:
         """
@@ -439,7 +465,7 @@ class DatasetCreator(object):
                                       f'dimension {time_series.ndim}'
         tt = time_series[:, :, -1, ...]
         no_data = np.where(tt <= 1, 1, 0)
-        cloud_snow_shadow = np.where((2 <= tt <= 3) | (8 <= tt), 1, 0)
+        cloud_snow_shadow = np.where(((2 <= tt) & (tt <= 3)) | (8 <= tt), 1, 0)
 
         return np.ones((time_series.shape[0],), dtype=bool), \
                rearrange(no_data, '... h w -> ... (h w)').sum(-1) / 128 ** 2, \
@@ -471,7 +497,8 @@ class DatasetCreator(object):
 
     def _update_metadata(self, id: int, tile_name: str, dates: List[str], crs: int,
                          affine: List[rasterio.Affine], patches_bool_map: np.ndarray,
-                         nodata_cover: np.ndarray, snow_cloud_cover: np.ndarray, patch_cover: np.ndarray) -> None:
+                         nodata_cover: np.ndarray, snow_cloud_cover: np.ndarray,
+                         patch_cover: np.ndarray) -> None:
         """
         Auxiliary method to update `self.metadata` DataFrame and `metadata.json` file
 
@@ -499,20 +526,27 @@ class DatasetCreator(object):
         -------
         """
         update = pd.DataFrame(
-            {'ID_PATCH': [(id * patches_bool_map.shape[0]) + i for i in range(patches_bool_map.shape[0])],
-             'ID_WITHIN_TILE': [i for i in range(patches_bool_map.shape[0])],
+            {'ID_PATCH': [int((id * patches_bool_map.shape[0]) + i) for i in range(patches_bool_map.shape[0])],
+             'ID_WITHIN_TILE': [int(i) for i in range(patches_bool_map.shape[0])],
              'Patch_Cover': [p for p in patch_cover],
              'Nodata_Cover': [{str(i): v for i, v in enumerate(p)} for p in nodata_cover],
              'Snow_Cloud_Cover': [{str(i): v for i, v in enumerate(p)} for p in snow_cloud_cover],
              'TILE': [tile_name for _ in range(patches_bool_map.shape[0])],
              'dates-S2': [{str(i): d for i, d in enumerate(dates)} for _ in
                           range(patches_bool_map.shape[0])],
-             'crs': [crs for _ in range(patches_bool_map.shape[0])],
+             'time-series_length': [int(len(dates)) for _ in range(patches_bool_map.shape[0])],
+             'crs': [int(crs) for _ in range(patches_bool_map.shape[0])],
              'affine': affine,
-             'Fold': [0 for _ in range(patches_bool_map.shape[0])],
+             'Fold': [-1 for _ in range(patches_bool_map.shape[0])],
              'Status': ['OK' if i else 'REMOVED' for i in patches_bool_map]})
 
-        self.metadata = self.metadata.append(update)
+        self.metadata = self.metadata.append(update, ignore_index=True)
+        self.metadata = self.metadata.astype({'ID_PATCH': 'int32',
+                                              'ID_WITHIN_TILE': 'int32',
+                                              'Patch_Cover': 'float32',
+                                              'time-series_length': 'int16',
+                                              'crs': 'int16',
+                                              'Fold': 'int16'})
         self.metadata.to_json(os.path.join(self.out_path, 'metadata.json'), orient="index")
 
     def _generate_folds(self) -> None:
@@ -520,45 +554,14 @@ class DatasetCreator(object):
         Auxiliary method to distribute patches (randomly) to 5 folds.
         It operates over `self.metadata` DataFrame
         """
-        pass
+        ok_indices = np.array(self.metadata[self.metadata['Status'] == 'OK'].index)
+        np.random.shuffle(ok_indices)
+        split_5 = np.array_split(ok_indices, 5)
 
-    def _generate_normalization(self) -> None:
-        """
-        Auxiliary method to calculate normalization values (mean, std) per fold
-        and export `NORM_S2_patch.json file`
-        Structure of json
-        {
-            "Fold_1": {
-                "mean": [
-                    1165.9398193359375,
-                    1375.6534423828125,
-                    1429.2191162109375,
-                    1764.798828125,
-                    2719.273193359375,
-                    3063.61181640625,
-                    3205.90185546875,
-                    3319.109619140625,
-                    2422.904296875,
-                    1639.370361328125
-                ],
-                "std": [
-                    1942.6156005859375,
-                    1881.9234619140625,
-                    1959.3798828125,
-                    1867.2239990234375,
-                    1754.5850830078125,
-                    1769.4046630859375,
-                    1784.860595703125,
-                    1767.7100830078125,
-                    1458.963623046875,
-                    1299.2833251953125
-                ]
-            },
-            ...
-        }
-        """
-        # see compute_norm_vals in dataset.py
-        pass
+        for i in range(len(split_5)):
+            self.metadata.loc[split_5[i], 'Fold'] = i + 1
+
+        self.metadata.to_json(os.path.join(self.out_path, 'metadata.json'), orient="index")
 
     def _create_segmentation(self, shape: Tuple, affine: rasterio.Affine,
                              bbox: rasterio.coords.BoundingBox) -> np.ndarray:
@@ -579,9 +582,9 @@ class DatasetCreator(object):
         """
         features_ = self._load_features(bbox)
 
-        assert 'geometry' in features, 'geometry column is expected to be in features GeoDataFrame'
-        assert 'value' in features, 'value column is expected to be in features GeoDataFrame and contain ' \
-                                    'integer classes encoding'
+        assert 'geometry' in features_, 'geometry column is expected to be in features GeoDataFrame'
+        assert 'value' in features_, 'value column is expected to be in features GeoDataFrame and contain ' \
+                                     'integer classes encoding'
 
         shapes_ = features_[['geometry', 'value']].values.tolist()
 
@@ -600,6 +603,6 @@ class DatasetCreator(object):
 
 
 if __name__ == "__main__":
-    c = DatasetCreator(output_dataset_path='/disk2/fratrik/test_dataset')
+    c = DatasetCreator(output_dataset_path='/disk2/<username>/S2TSCZCrop')
     c()
     print('Done')
