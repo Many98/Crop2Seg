@@ -107,7 +107,9 @@ def sentinel_query(polygon, opensearch_uri=OPENSEARCH_URI, count=5, account=ACCO
         Contains the full information about query.
     total_results : int
         Number of ids satisfying the query.
-
+    passed_indices: list
+        List of indices of products which passed all filters.
+        It will be used to correctly index `json_feed` dictionary
     """
 
     def rank(tile_type, cloud, size):
@@ -157,6 +159,7 @@ def sentinel_query(polygon, opensearch_uri=OPENSEARCH_URI, count=5, account=ACCO
         snow_percentage_list = []
         size_list = []
         title_list = []
+        passed_indices = []
         if not 'entry' in json_feed:
             raise RuntimeError('No results, matching set conditions was found. Check if cloud condition is not too.'
                                'restrictive')
@@ -193,6 +196,8 @@ def sentinel_query(polygon, opensearch_uri=OPENSEARCH_URI, count=5, account=ACCO
             logging.info(f"LEFT {df.shape[0]}/{int(json_feed['opensearch:totalResults'])} TILE CANDIDATES")
 
             id_list = df.head(count)['ids'].to_list()
+            passed_indices = list(df.head(count).index)
+
         elif type(json_feed['entry']) is dict:
             _type = [j for j in json_feed['entry']['str'] if j['name'] == 'processinglevel']
             tile_type = _type[0]['content'][-2:]
@@ -212,10 +217,10 @@ def sentinel_query(polygon, opensearch_uri=OPENSEARCH_URI, count=5, account=ACCO
 
         logging.info(f'OVERALL NUMBER OF RESULTS TO BE DOWNLOADED: {len(id_list)}/{total_results}')
 
-        return id_list, json_feed, total_results
+        return id_list, json_feed, total_results, passed_indices
 
 
-def sentinel_download(id_list, json_feed,
+def sentinel_download(id_list, json_feed, passed_indices,
                       path_dataset=SENTINEL_PATH_DATASET,
                       odata_uri=ODATA_URI, odata_resource=ODATA_RESOURCE, opensearch_uri=OPENSEARCH_URI,
                       account=ACCOUNT, password=PASSWORD):
@@ -228,6 +233,9 @@ def sentinel_download(id_list, json_feed,
         List of uuids of tiles to be downloaded.
     json_feed : dict
         Json response from query.
+    passed_indices: list
+        List of indices of products which passed all filters.
+        It will be used to correctly index `json_feed` dictionary
     path_dataset: str
         Specifies (path) where to download: SENTINEL_PATH_DATASET
     odata_uri : str
@@ -241,15 +249,15 @@ def sentinel_download(id_list, json_feed,
         logging.info(f'Downloading from ... \n {url_full}')
 
         if type(json_feed['entry']) is list:
-            path = os.path.join(path_dataset, json_feed['entry'][idx]['title'])
+            path = os.path.join(path_dataset, json_feed['entry'][passed_indices[idx]]['title'])
 
             # SAVE THE JSON RESPONSE
             with open(path + '.json', 'w') as outfile:
-                json.dump(json_feed['entry'][idx], outfile)
+                json.dump(json_feed['entry'][passed_indices[idx]], outfile)
 
             # CHECK WHETHER THE .ZIP IS ALREADY DOWNLOADED (BUT ZIP CAN BE STILL DOWNLOADED ONLY PARTIALLY)
-            if (json_feed['entry'][idx]['title'] + '.zip') in os.listdir(path_dataset) or \
-                    (json_feed['entry'][idx]['title'] + '.SAFE') in os.listdir(path_dataset):
+            if (json_feed['entry'][passed_indices[idx]]['title'] + '.zip') in os.listdir(path_dataset) or \
+                    (json_feed['entry'][passed_indices[idx]]['title'] + '.SAFE') in os.listdir(path_dataset):
                 logging.info('This tile has already been downloaded.')
                 continue
 
@@ -522,10 +530,10 @@ def sentinel(polygon=None, tile_name=None, count=4, platformname='Sentinel-2', p
     args = {k: v for k, v in args.items() if v is not None}
 
     # FINALLY CALL FUNCTION TO PERFORM SEARCH
-    id_list, json_feed, num_results = sentinel_query(polygon, count=count, **args, **kwargs)
+    id_list, json_feed, num_results, passed_indices = sentinel_query(polygon, count=count, **args, **kwargs)
 
     # DOWNLOAD TILES
-    sentinel_download(id_list, json_feed, path_dataset=path_to_save)
+    sentinel_download(id_list, json_feed, passed_indices, path_dataset=path_to_save)
 
     # in last pass it always left some unziped tiles
     time.sleep(10)
