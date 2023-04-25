@@ -3,3 +3,7 @@
 *token*
 *.ini
 .ipynb_checkpoints
+*.xml
+*.ovr
+*.cpg
+*.dbf
