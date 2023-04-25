@@ -1,6 +1,8 @@
 import os
 import sys
 import json
+import time
+
 from geojson import Polygon, Point
 from datetime import datetime, timedelta
 import pandas as pd
@@ -506,6 +508,9 @@ def sentinel(polygon=None, tile_name=None, count=4, platformname='Sentinel-2', p
 
     # DOWNLOAD TILES
     sentinel_download(id_list, json_feed, path_dataset=path_to_save)
+
+    # in last pass it always left some unziped tiles
+    time.sleep(15)
 
     # UNZIP TILES
     sentinel_unzip(path_dataset=path_to_save)
