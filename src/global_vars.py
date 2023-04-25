@@ -53,8 +53,21 @@ TILES = [i.replace(' ', '').replace('\n', '') for i in conf['tiles']['tiles'].sp
 DATES = [i.replace(' ', '').replace('\n', '').replace('TO', ' TO ') for i in conf['dates']['dates'].split(',')]
 
 ##############
+# CLOUDS     #
+##############
 CLOUDS = [int(i.replace(' ', '').replace('\n', '')) for i in conf['clouds']['clouds'].split(',')]
+MAX_CLOUD = int(conf['clouds']['max_cloud'])
 
+#############
+# SNOW      #
+#############
+MAX_SNOW = int(conf['snow']['max_snow'])
+
+#############
+# SIZE      #
+#############
+MIN_SIZE_L2A = int(conf['size']['min_size_l2a'])
+MIN_SIZE_L1C = int(conf['size']['min_size_l1c'])
 
 ###############
 SEN2COR = conf['sen2cor']['sen2cor']
