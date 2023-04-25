@@ -27,7 +27,6 @@ from filelock import FileLock
 import subprocess
 import re
 
-from utils import distribute_args
 
 # ### small boiler plate to add src to sys path
 import sys
@@ -37,8 +36,10 @@ root = str(file).split('src')[0]
 sys.path.append(root)
 # --------------------------------------
 
+from src.helpers.utils import distribute_args
+
 from src.global_vars import ODATA_URI, ODATA_RESOURCE, OPENSEARCH_URI, ACCOUNT, PASSWORD, \
-    SENTINEL_PATH_DATASET, SEN2COR, TILES, DATES, CLOUDS
+    SENTINEL_PATH_DATASET, SEN2COR, TILES, DATES, CLOUDS, MAX_CLOUD, MAX_SNOW, MIN_SIZE_L2A, MIN_SIZE_L1C
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -126,9 +127,9 @@ def sentinel_query(polygon, opensearch_uri=OPENSEARCH_URI, count=5, account=ACCO
 
         """
         if tile_type == 'L1C':
-            return (-(cloud / 6) + 10) * ((size / 100) - 4.2) if (size >= 420 and cloud <= 60) else 0.0
+            return (-(cloud / (MAX_CLOUD // 10)) + 10) * ((size / 100) - MIN_SIZE_L1C/100) if (size >= MIN_SIZE_L1C and cloud <= MAX_CLOUD) else 0.0
         elif tile_type == 'L2A':
-            return (-(cloud / 6) + 10) * ((size / 100) - 7.2) if (size >= 720 and cloud <= 60) else 0.0
+            return (-(cloud / (MAX_CLOUD // 10)) + 10) * ((size / 100) - MIN_SIZE_L2A/100) if (size >= MIN_SIZE_L2A and cloud <= MAX_CLOUD) else 0.0
         else:
             return None
 
@@ -155,6 +156,7 @@ def sentinel_query(polygon, opensearch_uri=OPENSEARCH_URI, count=5, account=ACCO
         cloud_percentage_list = []
         snow_percentage_list = []
         size_list = []
+        title_list = []
         if not 'entry' in json_feed:
             raise RuntimeError('No results, matching set conditions was found. Check if cloud condition is not too.'
                                'restrictive')
@@ -171,30 +173,44 @@ def sentinel_query(polygon, opensearch_uri=OPENSEARCH_URI, count=5, account=ACCO
                 _ = [j for j in json_feed['entry'][i]['double'] if j['name'] == 'snowicepercentage']
                 snow_percentage_list.append(float(_[0]['content']))
                 id_list.append(entry['id'])
+                title_list.append(json_feed['entry'][i]['title'])
 
-            df = pd.DataFrame(list(zip(id_list, tile_type_list, cloud_percentage_list, snow_percentage_list, size_list,
-                                       [None] * len(id_list))),
-                              columns=['ids', 'types', 'clouds', 'snow', 'size', 'rank'])
+            df = pd.DataFrame(list(zip(title_list, id_list, tile_type_list, cloud_percentage_list, snow_percentage_list,
+                                       size_list, [None] * len(id_list))),
+                              columns=['title', 'ids', 'types', 'clouds', 'snow', 'size', 'rank'])
 
-            logging.info("Applying snow cover percentage filter (<=40%)")
-            df = df[df['snow'] <= 40]
-            logging.info(f"Left {df.shape[0]}/{int(json_feed['opensearch:totalResults'])} tile candidates")
+            logging.info(f"APPLYING SNOW COVER PERCENTAGE FILTER (<={MAX_SNOW}%)")
+            df = df[df['snow'] <= MAX_SNOW]
+            logging.info(f"LEFT {df.shape[0]}/{int(json_feed['opensearch:totalResults'])} TILE CANDIDATES")
 
             if not df.empty:
                 # RANK THE PRODUCTS ACCORDING TO CLOUD PERCENTAGE AND SIZE
                 df['rank'] = df.apply(lambda x: rank(x['types'], x['clouds'], x['size']), axis=1)
                 df.sort_values('rank', ascending=False, inplace=True)
 
+            logging.info(f"APPLYING SIZE AND CLOUD COVER PERCENTAGE FILTERS (<={MAX_CLOUD}%)")
+            df = df[df['rank'] > 0.0]
+            logging.info(f"LEFT {df.shape[0]}/{int(json_feed['opensearch:totalResults'])} TILE CANDIDATES")
+
             id_list = df.head(count)['ids'].to_list()
         elif type(json_feed['entry']) is dict:
-            _ = [j for j in json_feed['entry']['double'] if j['name'] == 'snowicepercentage']
-            if float(_[0]['content']) <= 40:
+            _type = [j for j in json_feed['entry']['str'] if j['name'] == 'processinglevel']
+            tile_type = _type[0]['content'][-2:]
+            _snow = [j for j in json_feed['entry']['double'] if j['name'] == 'snowicepercentage']
+            _size = [j for j in json_feed['entry']['str'] if j['name'] == 'size']
+            _cloud = [j for j in json_feed['entry']['double'] if j['name'] == 'cloudcoverpercentage']
+            size = _size[0]['content'].split(' ')
+            size_filter = MIN_SIZE_L1C if tile_type == 'L1C' else MIN_SIZE_L2A
+            size = float(size[0]) if size[1] == 'MB' else float(size[0]) * 1000
+
+            if float(_snow[0]['content']) <= MAX_SNOW and size >= size_filter and float(_cloud[0]['content']) <= MAX_CLOUD:
                 id_list.append(json_feed['entry']['id'])  # in this case only one id is in json_feed
             else:
-                logging.info(f"Skipping due to high snow cover percentage {float(_[0]['content'])} % > 40%")
+                logging.info(f"SKIPPING DUE TO FILTER RESTRICTIONS")
 
         total_results = int(json_feed['opensearch:totalResults'])
-        logging.info(f'Overall number of results: {total_results}')
+
+        logging.info(f'OVERALL NUMBER OF RESULTS TO BE DOWNLOADED: {len(id_list)}/{total_results}')
 
         return id_list, json_feed, total_results
 
@@ -224,30 +240,32 @@ def sentinel_download(id_list, json_feed,
         url_full = f"{url}('{sentinel_uuid}')/$value"  # should be https://dhr1.cesnet.cz/odata/v1/Products(uuid)/$value
         logging.info(f'Downloading from ... \n {url_full}')
 
-        # CHECK WHETHER THE .ZIP IS ALREADY DOWNLOADED (BUT ZIP CAN BE STILL DOWNLOADED ONLY PARTIALLY)
         if type(json_feed['entry']) is list:
-            if (json_feed['entry'][idx]['title'] + '.zip') in os.listdir(path_dataset) or \
-                    (json_feed['entry'][idx]['title'] + '.SAFE') in os.listdir(path_dataset):
-                logging.info('This tile has already been downloaded.')
-                continue
-
             path = os.path.join(path_dataset, json_feed['entry'][idx]['title'])
 
             # SAVE THE JSON RESPONSE
             with open(path + '.json', 'w') as outfile:
                 json.dump(json_feed['entry'][idx], outfile)
-        # IT IS NOT LIST IF THERE IS ONLY ONE TILE TO BE DOWNLOADED
-        else:
-            if (json_feed['entry']['title'] + '.zip') in os.listdir(path_dataset) or \
-                    (json_feed['entry']['title'] + '.SAFE') in os.listdir(path_dataset):
+
+            # CHECK WHETHER THE .ZIP IS ALREADY DOWNLOADED (BUT ZIP CAN BE STILL DOWNLOADED ONLY PARTIALLY)
+            if (json_feed['entry'][idx]['title'] + '.zip') in os.listdir(path_dataset) or \
+                    (json_feed['entry'][idx]['title'] + '.SAFE') in os.listdir(path_dataset):
                 logging.info('This tile has already been downloaded.')
                 continue
 
+        # IT IS NOT LIST IF THERE IS ONLY ONE TILE TO BE DOWNLOADED
+        else:
             path = os.path.join(path_dataset, json_feed['entry']['title'])
 
             # SAVE THE JSON RESPONSE
             with open(path + '.json', 'w') as outfile:
                 json.dump(json_feed['entry'], outfile)
+
+            # CHECK WHETHER THE .ZIP IS ALREADY DOWNLOADED (BUT ZIP CAN BE STILL DOWNLOADED ONLY PARTIALLY)
+            if (json_feed['entry']['title'] + '.zip') in os.listdir(path_dataset) or \
+                    (json_feed['entry']['title'] + '.SAFE') in os.listdir(path_dataset):
+                logging.info('This tile has already been downloaded.')
+                continue
 
         # DOWNLOAD THE TILE
         try:
@@ -510,7 +528,7 @@ def sentinel(polygon=None, tile_name=None, count=4, platformname='Sentinel-2', p
     sentinel_download(id_list, json_feed, path_dataset=path_to_save)
 
     # in last pass it always left some unziped tiles
-    time.sleep(15)
+    time.sleep(10)
 
     # UNZIP TILES
     sentinel_unzip(path_dataset=path_to_save)
