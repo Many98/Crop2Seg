@@ -3,7 +3,6 @@ import os
 from datetime import datetime
 import logging
 
-import pandas as gpd
 import numpy as np
 import pandas as pd
 import torch
