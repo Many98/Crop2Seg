@@ -48,6 +48,13 @@ class DatasetCreator(object):
         H=W=128 pixels
     Currently only for Sentinel 2 tiles L2A.
 
+    Note that running `DatasetCreator` can use large portion of memory (up to 500 GB of RAM for
+                                                                        61 elements long time-series).
+    Therefore use of computing cluster with large enough memory portion is essential.
+    It operates over whole Sentinel-2 tiles (time-series) because quick processing was for me more important.
+    Implementation of alternative approach to first patchify S2 tiles into smaller (not memory intensive) patches and
+     then apply process them is not currently planned.
+
     """
 
     def __init__(self, output_dataset_path: str, features_path: str = AGRI_PATH_DATASET,
