@@ -21,6 +21,7 @@ from einops import rearrange
 # ### small boiler plate to add src to sys path
 import sys
 from pathlib import Path
+
 file = Path(__file__).resolve()
 root = str(file).split('src')[0]
 sys.path.append(root)
@@ -104,9 +105,10 @@ class DatasetCreator(object):
         if os.path.isfile(os.path.join(self.out_path, 'metadata.json')):
             self.metadata = DatasetCreator.load_metadata(os.path.join(self.out_path, 'metadata.json'))
         else:
-            self.metadata = pd.DataFrame({'ID_PATCH': [], 'ID_WITHIN_TILE': [], 'Patch_Cover': [], 'Nodata_Cover': [],
-                                          'Snow_Cloud_Cover': [], 'TILE': [], 'dates-S2': [], 'time-series_length': [],
-                                          'crs': [], 'affine': [], 'Fold': [], 'Status': []})
+            self.metadata = pd.DataFrame(
+                {'ID_PATCH': [], 'ID_WITHIN_TILE': [], 'Background_Cover': [], 'Nodata_Cover': [],
+                 'Snow_Cloud_Cover': [], 'TILE': [], 'dates-S2': [], 'time-series_length': [],
+                 'crs': [], 'affine': [], 'Fold': [], 'Status': []})
 
     def __call__(self, *args, **kwargs):
         """
@@ -130,7 +132,8 @@ class DatasetCreator(object):
 
             if self.download:
                 logging.info(f"DOWNLOADING TILES WITH NAME: {tile_name}")
-                self._download_timeseries(tile_name)  # TODO this will not work for PRETRAIN DATASET ... another dir struct
+                self._download_timeseries(
+                    tile_name)  # TODO this will not work for PRETRAIN DATASET ... another dir struct
 
             logging.info(f"CONSTRUCTING TIME-SERIES FOR TILE: {tile_name}")
             time_series, bbox, affine, crs, file_names, dates = self._load_s2(tile_name)  # T x (C+1) x H x W
@@ -150,10 +153,10 @@ class DatasetCreator(object):
             del segmentation_mask
 
             logging.info(f"POSTPROCESSING TIME-SERIES FOR TILE: {tile_name}")
-            patches_bool_map, nodata_cover, snow_cloud_cover, patch_cover = self._postprocess_s2(patches_s2)
+            patches_bool_map, nodata_cover, snow_cloud_cover, background_cover = self._postprocess_s2(patches_s2)
             if not self.for_pretraining:
                 # NOTE that we set as valid only those patches which have background pixels percentage <= 0.7
-                patches_bool_map, patch_cover = self._postprocess_segmentation(patches_segment, 0.7)
+                patches_bool_map, background_cover = self._postprocess_segmentation(patches_segment, 0.7)
 
             # we do not save scene classification, it was only used to get number of nodata_pixels and snow&cloud pixels
             logging.info(f"SAVING TIME-SERIES DATA FOR TILE: {tile_name}")
@@ -170,7 +173,7 @@ class DatasetCreator(object):
 
             logging.info(f"UPDATING METADATA FOR PATCHES OF TILE: {tile_name}")
             self._update_metadata(id, tile_name, dates, crs, patches_affine, patches_bool_map, nodata_cover,
-                                  snow_cloud_cover, patch_cover)
+                                  snow_cloud_cover, background_cover)
 
             if self.delete_source:
                 logging.info(f"REMOVING TILES WITH NAME: {tile_name}")
@@ -200,7 +203,12 @@ class DatasetCreator(object):
         assert 'metadata.json' in metadata_path, '`metadata_path` is expected to have filename `metadata.json`'
         assert os.path.isfile(metadata_path), f'`metadata_path` ({metadata_path}) is now valid path'
 
-        return pd.read_json(metadata_path, orient='records')
+        return pd.read_json(metadata_path, orient='records', dtype={'ID_PATCH': 'int32',
+                                                                    'ID_WITHIN_TILE': 'int32',
+                                                                    'Background_Cover': 'float32',
+                                                                    'time-series_length': 'int16',
+                                                                    'crs': 'int16',
+                                                                    'Fold': 'int8'})
 
     def _delete_tiles(self, tile_name: str) -> None:
         """
@@ -321,8 +329,7 @@ class DatasetCreator(object):
         #  use NamedTemporaryFile instead https://rasterio.readthedocs.io/en/stable/topics/memory-files.html
         memfile = rasterio.io.MemoryFile(filename=f'raster_{id}.tif')
         with memfile.open(**profile) as rdata:
-            rdata.write(data)  # write the data
-            rdata._set_all_descriptions(f'Unpatchified raster. Id: {id}')
+            rdata.write(data[None, ...].astype('uint8'))  # write the data
 
         # with rasterio.open('example.tif', 'w', **profile) as dst:
         #         dst.write(data, 1)
@@ -330,7 +337,7 @@ class DatasetCreator(object):
         if export:
             os.makedirs(os.path.join(os.path.split(metadata_path)[0], 'export'), exist_ok=True)
 
-        return memfile.open(), os.path.join(os.path.split(metadata_path)[0], 'export', f'raster_{id}')
+        return memfile.open(), os.path.join(os.path.split(metadata_path)[0], 'export', f'raster_{id}.tif')
 
     def _save_patches(self, data: np.ndarray, bool_map: np.ndarray, where: str, filename: str, id: int) -> None:
         """
@@ -369,7 +376,8 @@ class DatasetCreator(object):
         ff = glob(os.path.join(self.tiles_path, '*.SAFE'))
         ff = [os.path.split(f)[-1] for f in ff]
         return [f for f in sorted(ff,
-                                  key=lambda x: datetime.strptime(x.split('_')[2][:8], '%Y%m%d')) if f.split('_')[5] == tile_name and
+                                  key=lambda x: datetime.strptime(x.split('_')[2][:8], '%Y%m%d')) if
+                f.split('_')[5] == tile_name and
                 f.split('_')[1].endswith('L2A')]
 
     def _load_s2(self, tile_name: str) -> Tuple[np.ndarray, rasterio.coords.BoundingBox, rasterio.Affine,
@@ -503,7 +511,7 @@ class DatasetCreator(object):
             Number between 0-1 defining maximal allowed percentage of background pixels
         Returns
         -------
-            np.ndarray bool map representing valid patches, patch_cover [NUM_PATCHES]
+            np.ndarray bool map representing valid patches, background_cover [NUM_PATCHES]
         """
         assert segmentation_mask.ndim == 3, '`segmentation_mask` argument is expected to be of dimension 3, but is of' \
                                             f'dimension {segmentation_mask.ndim}'
@@ -516,7 +524,7 @@ class DatasetCreator(object):
     def _update_metadata(self, id: int, tile_name: str, dates: List[str], crs: int,
                          affine: List[rasterio.Affine], patches_bool_map: np.ndarray,
                          nodata_cover: np.ndarray, snow_cloud_cover: np.ndarray,
-                         patch_cover: np.ndarray) -> None:
+                         background_cover: np.ndarray) -> None:
         """
         Auxiliary method to update `self.metadata` DataFrame and `metadata.json` file
 
@@ -538,33 +546,40 @@ class DatasetCreator(object):
             Array of shape NUM_PATCHES x T representing nodata cover
         snow_cloud_cover: np.ndarray
             Array of shape NUM_PATCHES x T representing snow&cloud cover
-        patch_cover: np.ndarray
+        background_cover: np.ndarray
             Array of shape NUM_PATCHES representing patch cover i.e. percentage of all non-background pixels
         Returns
         -------
         """
+        background_cover = np.round(background_cover, 2)
+        nodata_cover = np.round(nodata_cover, 2)
+        snow_cloud_cover = np.round(snow_cloud_cover, 2)
+
         update = pd.DataFrame(
             {'ID_PATCH': [int((id * patches_bool_map.shape[0]) + i) for i in range(patches_bool_map.shape[0])],
              'ID_WITHIN_TILE': [int(i) for i in range(patches_bool_map.shape[0])],
-             'Patch_Cover': [p for p in patch_cover],
-             'Nodata_Cover': [{str(i): v for i, v in enumerate(p)} for p in nodata_cover],
-             'Snow_Cloud_Cover': [{str(i): v for i, v in enumerate(p)} for p in snow_cloud_cover],
+             'Background_Cover': [p for p in background_cover],
+             'Nodata_Cover': [{str(i): v for i, v in enumerate(p)} if patches_bool_map[ii] else None for
+                              ii, p in
+                              enumerate(nodata_cover)],
+             'Snow_Cloud_Cover': [{str(i): v for i, v in enumerate(p)} if patches_bool_map[ii] else None for
+                                  ii, p
+                                  in enumerate(snow_cloud_cover)],
              'TILE': [tile_name for _ in range(patches_bool_map.shape[0])],
-             'dates-S2': [{str(i): d for i, d in enumerate(dates)} for _ in
-                          range(patches_bool_map.shape[0])],
+             'dates-S2': [{str(i): d for i, d in enumerate(dates)} if ii else None for ii in patches_bool_map],
              'time-series_length': [int(len(dates)) for _ in range(patches_bool_map.shape[0])],
              'crs': [int(crs) for _ in range(patches_bool_map.shape[0])],
-             'affine': affine,
+             'affine': [a if patches_bool_map[ii] else None for ii, a in enumerate(affine)],
              'Fold': [-1 for _ in range(patches_bool_map.shape[0])],
              'Status': ['OK' if i else 'REMOVED' for i in patches_bool_map]})
 
         self.metadata = self.metadata.append(update, ignore_index=True)
         self.metadata = self.metadata.astype({'ID_PATCH': 'int32',
                                               'ID_WITHIN_TILE': 'int32',
-                                              'Patch_Cover': 'float32',
-                                              'time-series_length': 'int16',
+                                              'Background_Cover': 'float32',
+                                              'time-series_length': 'int8',
                                               'crs': 'int16',
-                                              'Fold': 'int16'})
+                                              'Fold': 'int8'})
         self.metadata.to_json(os.path.join(self.out_path, 'metadata.json'), orient="records", indent=4)
 
     def _generate_folds(self) -> None:
