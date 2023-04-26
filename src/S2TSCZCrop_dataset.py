@@ -8,22 +8,33 @@ import pandas as pd
 import torch
 import torch.utils.data as tdata
 
+# ### small boiler plate to add src to sys path
+import sys
+from pathlib import Path
+
+file = Path(__file__).resolve()
+root = str(file).split('src')[0]
+sys.path.append(root)
+# --------------------------------------
+
+from src.helpers.dataset_creator import DatasetCreator
+
 logging.getLogger().setLevel(logging.INFO)
 
 
 class S2TSCZCrop_Dataset(tdata.Dataset):
     def __init__(
-        self,
-        folder,
-        norm=True,
-        cache=False,
-        mem16=False,
-        folds=None,
-        reference_date="2019-02-01",
-        class_mapping=None,
-        mono_date=None,
-        from_date=None,
-        to_date=None
+            self,
+            folder,
+            norm=True,
+            cache=False,
+            mem16=False,
+            folds=None,
+            reference_date="2019-02-01",
+            class_mapping=None,
+            mono_date=None,
+            from_date=None,
+            to_date=None
     ):
         """
         TODO adjust it to handle also pretrain dataset ... difference should be only in loading TARGET
@@ -89,7 +100,13 @@ class S2TSCZCrop_Dataset(tdata.Dataset):
 
         # Get metadata  TODO what to do with this
         logging.info("Reading patch metadata . . .")
-        self.meta_patch = pd.read_json(os.path.join(folder, "metadata.json"), orient='index')
+        self.meta_patch = pd.read_json(os.path.join(folder, "metadata.json"), orient='records',
+                                       dtype={'ID_PATCH': 'int32',
+                                              'ID_WITHIN_TILE': 'int32',
+                                              'Background_Cover': 'float32',
+                                              'time-series_length': 'int8',
+                                              'crs': 'int16',
+                                              'Fold': 'int8'})
         self.meta_patch = self.meta_patch[self.meta_patch['Status'] == 'OK']
         self.meta_patch.index = self.meta_patch["ID_PATCH"].astype(int)
         self.meta_patch.sort_index(inplace=True)
@@ -105,8 +122,8 @@ class S2TSCZCrop_Dataset(tdata.Dataset):
             d = pd.DataFrame().from_dict(date_seq, orient="index")
             d = d[0].apply(
                 lambda x: (
-                    datetime(int(str(x)[:4]), int(str(x)[4:6]), int(str(x)[6:]))
-                    - self.reference_date
+                        datetime(int(str(x)[:4]), int(str(x)[4:6]), int(str(x)[6:]))
+                        - self.reference_date
                 ).days
             )
             date_table.loc[pid, d.values] = 1
@@ -137,7 +154,7 @@ class S2TSCZCrop_Dataset(tdata.Dataset):
             self.norm = {}
 
             with open(
-                os.path.join(folder, "NORM_S2_patch.json"), "r"
+                    os.path.join(folder, "NORM_S2_patch.json"), "r"
             ) as file:
                 normvals = json.loads(file.read())
             selected_folds = folds if folds is not None else range(1, 6)
@@ -168,7 +185,7 @@ class S2TSCZCrop_Dataset(tdata.Dataset):
                     os.path.join(
                         self.folder,
                         f"DATA_S2",
-                        f"S2_{id_patch}.npy",
+                        f"S2_{id_patch}",  # f"S2_{id_patch}.npy",
                     )
                 ).astype(np.float32)
             }  # T x C x H x W arrays
@@ -177,16 +194,16 @@ class S2TSCZCrop_Dataset(tdata.Dataset):
             if self.norm is not None:
                 data = {
                     s: (d - self.norm[s][0][None, :, None, None])
-                    / self.norm[s][1][None, :, None, None]
+                       / self.norm[s][1][None, :, None, None]
                     for s, d in data.items()
                 }
             # TODO we want to do this bit different
             target = np.load(
                 os.path.join(
-                    self.folder, f"ANNOTATIONS", f"TARGET_{id_patch}.npy"
+                    self.folder, f"ANNOTATIONS", f"TARGET_{id_patch}"  # f"TARGET_{id_patch}.npy"
                 )
             )
-            target = torch.from_numpy(target[0].astype(int))
+            target = torch.from_numpy(target.astype(int))
 
             if self.class_mapping is not None:
                 target = self.class_mapping(target)
@@ -233,13 +250,23 @@ class S2TSCZCrop_Dataset(tdata.Dataset):
 
         return (data, dates), target
 
+    def rasterize_target(self, item, export=False):
+        id_patch = self.id_patches[item]
+        _, target = self[item]
+        # currently works only for 2d arrays
+        r = DatasetCreator.unpatchify(id=id_patch, data=target.numpy(), metadata_path=os.path.join(self.folder,
+                                                                                                   "metadata.json"),
+                                      nodata=0, dtype='uint8', export=export)
+
+        return r
+
 
 def prepare_dates(date_dict, reference_date):
     d = pd.DataFrame().from_dict(date_dict, orient="index")
     d = d[0].apply(
         lambda x: (
-            datetime(int(str(x)[:4]), int(str(x)[4:6]), int(str(x)[6:]))
-            - reference_date
+                datetime(int(str(x)[:4]), int(str(x)[4:6]), int(str(x)[6:]))
+                - reference_date
         ).days
     )
     return d.values
@@ -278,4 +305,9 @@ def compute_norm_vals(folder):
 
 
 if __name__ == '__main__':
-    d = S2TSCZCrop_Dataset(folder='/disk2/<username>/test_dataset', norm=False)
+    d = S2TSCZCrop_Dataset(folder='/disk2/<username>/S2TSCZCrop', norm=False)
+    out = d[0]  # (data, dates), target
+
+    r1 = d.rasterize_target(0, export=False)
+    r2 = d.rasterize_target(0, export=True)
+    print('Done')
