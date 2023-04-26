@@ -184,7 +184,7 @@ class DatasetCreator(object):
         assert 'metadata.json' in metadata_path, '`metadata_path` is expected to have filename `metadata.json`'
         assert os.path.isfile(metadata_path), f'`metadata_path` ({metadata_path}) is now valid path'
 
-        return pd.read_json(metadata_path, orient='index')
+        return pd.read_json(metadata_path, orient='records')
 
     def _delete_tiles(self, tile_name: str) -> None:
         """
@@ -547,7 +547,7 @@ class DatasetCreator(object):
                                               'time-series_length': 'int16',
                                               'crs': 'int16',
                                               'Fold': 'int16'})
-        self.metadata.to_json(os.path.join(self.out_path, 'metadata.json'), orient="index")
+        self.metadata.to_json(os.path.join(self.out_path, 'metadata.json'), orient="records", indent=4)
 
     def _generate_folds(self) -> None:
         """
@@ -561,7 +561,7 @@ class DatasetCreator(object):
         for i in range(len(split_5)):
             self.metadata.loc[split_5[i], 'Fold'] = i + 1
 
-        self.metadata.to_json(os.path.join(self.out_path, 'metadata.json'), orient="index")
+        self.metadata.to_json(os.path.join(self.out_path, 'metadata.json'), orient="records", indent=4)
 
     def _create_segmentation(self, shape: Tuple, affine: rasterio.Affine,
                              bbox: rasterio.coords.BoundingBox) -> np.ndarray:
