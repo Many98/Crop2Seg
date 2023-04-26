@@ -1,6 +1,9 @@
 import os
 import shutil
 from typing import List, Tuple, Union
+from glob import glob
+
+import gc
 
 import pandas as pd
 from tqdm.auto import tqdm
@@ -49,6 +52,7 @@ class DatasetCreator(object):
     def __init__(self, output_dataset_path: str, features_path: str = AGRI_PATH_DATASET,
                  tiles_path: str = SENTINEL_PATH_DATASET,
                  for_pretraining: bool = False,
+                 download: bool = False,
                  delete_source_tiles: bool = False
                  ):
         """
@@ -68,6 +72,8 @@ class DatasetCreator(object):
         for_pretraining: bool
             Whether to create dataset for pretraining.
             If `for_pretraining=True` it is expected that in `tiles_path` TODO ...
+        download: bool
+            Whether to also download particular tiles
         delete_source_tiles: bool
             Whether to delete input tiles after time-series per particular tile is generated
         """
@@ -77,6 +83,7 @@ class DatasetCreator(object):
 
         self.for_pretraining = for_pretraining
 
+        self.download = download
         self.delete_source = delete_source_tiles
 
         os.makedirs(self.out_path, exist_ok=True)
@@ -121,8 +128,9 @@ class DatasetCreator(object):
             if self.metadata[self.metadata['TILE'] == tile_name]['TILE'].shape[0] == 82 * 82:
                 continue
 
-            # logging.info(f"DOWNLOADING TILES WITH NAME: {tile_name}")
-            # self._download_timeseries(tile_name)  # TODO this will not work for PRETRAIN DATASET ... another dir struct
+            if self.download:
+                logging.info(f"DOWNLOADING TILES WITH NAME: {tile_name}")
+                self._download_timeseries(tile_name)  # TODO this will not work for PRETRAIN DATASET ... another dir struct
 
             logging.info(f"CONSTRUCTING TIME-SERIES FOR TILE: {tile_name}")
             time_series, bbox, affine, crs, file_names, dates = self._load_s2(tile_name)  # T x (C+1) x H x W
@@ -138,6 +146,9 @@ class DatasetCreator(object):
             patches_s2, patches_affine = self._patchify(time_series,
                                                         affine)  # NUM_PATCHES x T x C+1 x PATCH_SIZE x PATCH_SIZE
 
+            del time_series
+            del segmentation_mask
+
             logging.info(f"POSTPROCESSING TIME-SERIES FOR TILE: {tile_name}")
             patches_bool_map, nodata_cover, snow_cloud_cover, patch_cover = self._postprocess_s2(patches_s2)
             if not self.for_pretraining:
@@ -149,9 +160,13 @@ class DatasetCreator(object):
             self._save_patches(patches_s2[:, :, :-1, ...], patches_bool_map, where=self.data_s2_path,
                                filename=f'S2', id=id)
 
+            del patches_s2
+
             if not self.for_pretraining:
                 self._save_patches(patches_segment, patches_bool_map, where=self.segmentation_path,
                                    filename=f'TARGET', id=id)
+
+            del patches_segment
 
             logging.info(f"UPDATING METADATA FOR PATCHES OF TILE: {tile_name}")
             self._update_metadata(id, tile_name, dates, crs, patches_affine, patches_bool_map, nodata_cover,
@@ -163,6 +178,7 @@ class DatasetCreator(object):
 
             logging.info(f"PATCHES FOR TILE {tile_name} GENERATED SUCCESSFULLY \n"
                          f"------------------------------------------------------\n\n")
+            gc.collect()
 
         if not self.for_pretraining:
             logging.info(f"GENERATING RANDOM FOLDS")
@@ -350,9 +366,11 @@ class DatasetCreator(object):
         -------
             List of filenames containing `tile_name`
         """
-        return [f for f in sorted(os.listdir(self.tiles_path),
-                                  key=lambda x: datetime.strptime(x.split('_')[2][:8], '%Y%m%d')) if f.endswith('.SAFE')
-                and f.split('_')[5] == tile_name and f.split('_')[1].endswith('L2A')]
+        ff = glob(os.path.join(self.tiles_path, '*.SAFE'))
+        ff = [os.path.split(f)[-1] for f in ff]
+        return [f for f in sorted(ff,
+                                  key=lambda x: datetime.strptime(x.split('_')[2][:8], '%Y%m%d')) if f.split('_')[5] == tile_name and
+                f.split('_')[1].endswith('L2A')]
 
     def _load_s2(self, tile_name: str) -> Tuple[np.ndarray, rasterio.coords.BoundingBox, rasterio.Affine,
                                                 int, List[str], List[str]]:
