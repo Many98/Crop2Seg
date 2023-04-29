@@ -110,6 +110,8 @@ class Sentinel2Raster(object):
     for handling tile rasters generated after supperresolving with neural network (see sentinel.py module)
     It will unify raster resolution to 10m by cubic interpolation.
     Everything is done on the fly.
+    When reading from Sentinel-2 .SAFE order of channels should be as follows:
+        [B04, B03, B02, B08, B05, B06, B07, B8A, B11, B12, B01, B09, SCL]
     """
 
     def __init__(self, file_path):
