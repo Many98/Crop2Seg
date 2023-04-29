@@ -7,6 +7,8 @@ from einops import reduce, rearrange, repeat
 from src.backbones.squeeze_and_excitation import SqueezeAndExcitation
 from src.backbones.temp_shared_block import TemporallySharedBlock
 
+from src.utils import experimental
+
 
 class DepthwiseSeparableConv2D(nn.Module):
     """
@@ -26,6 +28,7 @@ class DepthwiseSeparableConv2D(nn.Module):
         return out
 
 
+@experimental
 class SparseConv2d(nn.Conv2d):
     """
     Ineffective implementation of sparse convolution using classical "dense" convolution
@@ -43,6 +46,7 @@ class SparseConv2d(nn.Conv2d):
     def __init__(self, *args, **kwargs):
         super(SparseConv2d, self).__init__(*args, **kwargs)
 
+        raise NotImplementedError
         #self.register_buffer('mask', self.weight.data.clone())
         #_, _, kH, kW = self.weight.size()
         #self.mask.fill_(1)
