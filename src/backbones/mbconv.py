@@ -8,6 +8,9 @@ from src.backbones.squeeze_and_excitation import SqueezeAndExcitation
 
 
 class ResidualAdd(nn.Module):
+    """
+    Simple residual connection performing add operation.
+    """
     def __init__(self, block: nn.Module):
         super().__init__()
         self.block = block
@@ -95,8 +98,10 @@ class MBConv(nn.Sequential):
 
 class MBConvLayer(nn.Module):
     """
-    Alternative to ConvLayer used in UTAE
-    based on MBConv module
+    Building block of `MBConvBlocks` (alternative to `ConvLayer` used in `conv.py` module)
+    Particularly it stacks all parts of "classical" MB convolution layer
+    i.e. few MB convolutional layers
+
     """
 
     def __init__(
@@ -126,7 +131,8 @@ class MBConvLayer(nn.Module):
 
 class MBConvBlock(TemporallySharedBlock):
     """
-    Alternative implementation of temporally shared ConvBlock based on MBConv block
+    Alternative building block of UTAE based on MB convolutional layers (alternative to `ConvBlock`
+     within `conv.py` module)
     """
     def __init__(
             self,
@@ -148,7 +154,8 @@ class MBConvBlock(TemporallySharedBlock):
 
 class MBDownConvBlock(TemporallySharedBlock):
     """
-    Alternative implementation of temporally shared DownConvBlock based on MBConv block
+    Alternative building block of UTAE based on MB convolutional layers (alternative to `DownConvBlock`
+     within `conv.py` module)
     """
     def __init__(
             self,
@@ -193,7 +200,8 @@ class MBDownConvBlock(TemporallySharedBlock):
 
 class MBUpConvBlock(nn.Module):
     """
-    Alternative implementation of temporally shared UpConvBlock based on MBCOnv block
+    Alternative building block of UTAE based on MB convolutional layers (alternative to `UpConvBlock`
+     within `conv.py` module)
     """
     def __init__(
             self, d_in, d_out, k, s, p, d_skip=None, norm="batch", *args,
