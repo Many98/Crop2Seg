@@ -4,6 +4,8 @@ import einops
 import torch.nn.functional as F
 from einops import rearrange
 
+from src.utils import experimental
+
 
 class PositionalEncoder(nn.Module):
     """
@@ -41,7 +43,7 @@ class AbsolutePositionalEncoder(nn.Module):
     """
     Alternative implementation of positional encoder using absolute encoding i.e. number of day within year
     """
-    def __init__(self, d_model: int, T: int = 100, repeat=None):
+    def __init__(self, d_model: int, repeat=None):
         super(AbsolutePositionalEncoder, self).__init__()
 
         self.d = d_model
@@ -68,10 +70,14 @@ class AbsolutePositionalEncoder(nn.Module):
         return pos_emb  # B x T x d_model
 
 
+@experimental
 class LearnedPositionalEncoder(object):
     """
     Alternative implementation of positional encoder where positional embeddings
     are learned rather than predefined.
+
+    Notes:
+        This implementation was not tested properly yet and is experimental
     """
     def __init__(self, d_model: int, T: int = 100, repeat=None):
         """
