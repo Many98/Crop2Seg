@@ -4,6 +4,9 @@ from torch import Tensor
 
 
 class Temporal_Aggregator(nn.Module):
+    """
+    Original temporal aggregator as implemented in UTAE
+    """
     def __init__(self, mode="mean"):
         super(Temporal_Aggregator, self).__init__()
         self.mode = mode
@@ -75,6 +78,14 @@ class Temporal_Aggregator(nn.Module):
 
 
 class Temporal_Aggregator3D(nn.Module):
+    """
+    Modification of original Temporal_Aggregator for testing/experimental purposes.
+    Particularly use of "up-convolution" instead of simple bilinear interpolation
+    was tested. To tackle problem of changing size of T dimension in every batch
+    it was proposed to use 3D "up-convolution" instead of 2D
+    Note that:
+        Results indicate that this change does not enhance performance
+    """
     def __init__(self, mode="mean"):
         super(Temporal_Aggregator3D, self).__init__()
         self.mode = mode
