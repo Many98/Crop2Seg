@@ -66,6 +66,11 @@ class SparseConv2d(nn.Conv2d):
 
 
 class ConvLayer(nn.Module):
+    """
+    Building block of `ConvBlocks`
+    Particularly it stacks all parts of "classical" convolution layer
+    i.e. few normalizations and convolutions
+    """
     def __init__(
             self,
             nkernels,
@@ -131,6 +136,16 @@ class ConvLayer(nn.Module):
 
 
 class ConvBlock(TemporallySharedBlock):
+    """
+    Building block of UTAE.
+    Particularly it is convolutional block used within encoder and decoder part of UTAE.
+    It is responsible for applying: classical convolution while not changing resolution of feature maps
+
+    Note that `ConvBlock` is child of `TemporallySharedBlock` which effectively
+    just merge batch B and time T dimension into one bigger batch dimension and operates
+    over it with classical convolutions. This merge of B and T dimension is applied only if input id 5D
+    i.e. it is time-series
+    """
     def __init__(
             self,
             nkernels,
@@ -156,6 +171,16 @@ class ConvBlock(TemporallySharedBlock):
 
 
 class DownConvBlock(TemporallySharedBlock):
+    """
+    Building block of UTAE.
+    Particularly it is convolutional block used within encoder part of UTAE.
+    It is responsible for applying: classical convolution while downsize resolution of feature maps
+
+    Note that `DownConvBlock` is child of `TemporallySharedBlock` which effectively
+    just merge batch B and time T dimension into one bigger batch dimension and operates
+    over it with classical convolutions. This merge of B and T dimension is applied only if input id 5D
+    i.e. it is time-series
+    """
     def __init__(
             self,
             d_in,
@@ -207,6 +232,13 @@ class DownConvBlock(TemporallySharedBlock):
 
 
 class UpConvBlock(nn.Module):
+    """
+    Building block of UTAE.
+    Particularly it is convolutional block used within decoder part of UTAE.
+    It is responsible for applying: 1x1 skip convolution
+                                    "up-convolution" while increase resolution of feature maps
+                                    and some classical convolution
+    """
     def __init__(
             self, d_in, d_out, k, s, p, norm="batch", d_skip=None, padding_mode="reflect",
             conv_type='2d', add_squeeze=False
