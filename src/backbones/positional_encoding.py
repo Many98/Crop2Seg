@@ -6,6 +6,9 @@ from einops import rearrange
 
 
 class PositionalEncoder(nn.Module):
+    """
+    Original implementation of positional encoder used in UTAE
+    """
     def __init__(self, d_model, T=1000, repeat=None, offset=0):
         super(PositionalEncoder, self).__init__()
         self.d = d_model
@@ -35,6 +38,9 @@ class PositionalEncoder(nn.Module):
 
 
 class AbsolutePositionalEncoder(nn.Module):
+    """
+    Alternative implementation of positional encoder using absolute encoding i.e. number of day within year
+    """
     def __init__(self, d_model: int, T: int = 100, repeat=None):
         super(AbsolutePositionalEncoder, self).__init__()
 
@@ -63,10 +69,12 @@ class AbsolutePositionalEncoder(nn.Module):
 
 
 class LearnedPositionalEncoder(object):
+    """
+    Alternative implementation of positional encoder where positional embeddings
+    are learned rather than predefined.
+    """
     def __init__(self, d_model: int, T: int = 100, repeat=None):
         """
-        Positional embeddings are learned rather than predefined
-
         d_model: dimension of embeddings
         T: maximal length of sequence to be learned
         """
