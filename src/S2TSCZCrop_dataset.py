@@ -3,6 +3,8 @@ import os
 from datetime import datetime
 import logging
 
+from tqdm import tqdm
+
 import numpy as np
 import pandas as pd
 import torch
@@ -34,7 +36,8 @@ class S2TSCZCrop_Dataset(tdata.Dataset):
             class_mapping=None,
             mono_date=None,
             from_date=None,
-            to_date=None
+            to_date=None,
+            channels_like_pastis=True
     ):
         """
         TODO adjust it to handle also pretrain dataset ... difference should be only in loading TARGET
@@ -69,11 +72,22 @@ class S2TSCZCrop_Dataset(tdata.Dataset):
             from_date (int or str, optional):
 
             to_date: (int or str, optional):  TODO
+            channels_like_pastis: bool
+                Whether to rearrange channels to be in same order like in PASTIS dataset.
+                It should be used if one want to fine-tune using UTAE's original pretrained weights.
+                Particularly PASTIS has channels ordered like this:
+                    [B02, B03, B04, B05, B06, B07, B08, B8A, B11, B12]
+                while S2TSCZCrop has channels ordered as found in .SAFE format:
+                    [B04, B03, B02, B08, B05, B06, B07, B8A, B11, B12]
         """
         super(S2TSCZCrop_Dataset, self).__init__()
         self.folder = folder
         self.norm = norm
         self.reference_date = datetime(*map(int, reference_date.split("-")))
+
+        # simple fix to get same order of channels like in PASTIS dataset
+        self.channels_like_pastis = channels_like_pastis
+        self.channels_order = [2, 1, 0, 4, 5, 6, 3, 7, 8, 9] if channels_like_pastis else [_ for _ in range(10)]
 
         self.cache = cache
         self.mem16 = mem16
@@ -162,15 +176,15 @@ class S2TSCZCrop_Dataset(tdata.Dataset):
             stds = [normvals[f"Fold_{f}"]["std"] for f in selected_folds]
             self.norm['S2'] = np.stack(means).mean(axis=0), np.stack(stds).mean(axis=0)
             self.norm['S2'] = (
-                torch.from_numpy(self.norm['S2'][0]).float(),
-                torch.from_numpy(self.norm['S2'][1]).float(),
+                torch.from_numpy(self.norm['S2'][0]).float()[self.channels_order],
+                torch.from_numpy(self.norm['S2'][1]).float()[self.channels_order],
             )
         else:
             self.norm = None
         logging.info("Dataset ready.")
 
     def __len__(self):
-        return self.len
+        return self.meta_patch.shape[0]
 
     def get_dates(self, id_patch, sat):
         return self.date_range[np.where(self.date_tables[sat][id_patch] == 1)[0]]
@@ -189,7 +203,7 @@ class S2TSCZCrop_Dataset(tdata.Dataset):
                     )
                 ).astype(np.float32)
             }  # T x C x H x W arrays
-            data = {s: torch.from_numpy(a) for s, a in data.items()}
+            data = {s: torch.from_numpy(a)[self.channels_order] for s, a in data.items()}
 
             if self.norm is not None:
                 data = {
@@ -274,7 +288,7 @@ def prepare_dates(date_dict, reference_date):
 
 def compute_norm_vals(folder):
     """
-    Auxiliary function to generate mean and std over dataset
+    Auxiliary function to generate mean and std over dataset (per fold)
     Parameters
     ----------
     folder :
@@ -284,14 +298,19 @@ def compute_norm_vals(folder):
 
     """
     norm_vals = {}
+    dt = S2TSCZCrop_Dataset(folder=folder, norm=False, channels_like_pastis=False)
+    meta_patch_copy = dt.meta_patch.copy(deep=True)
+
     for fold in range(1, 6):
-        dt = S2TSCZCrop_Dataset(folder=folder, norm=False, folds=[fold])
+        dt.meta_patch = meta_patch_copy[meta_patch_copy['Fold'] == fold]
+        dt.id_patches = dt.meta_patch.index
+
         means = []
         stds = []
-        for i, b in enumerate(dt):
-            logging.info(f"{i}/{len(dt)}", end="\r")
+        for i, b in enumerate(tqdm(dt, desc=f'Processing fold: {fold}')):
+
             data = b[0][0]  # T x C x H x W
-            data = data.permute(1, 0, 2, 3).contiguous()  # C x B x T x H x W
+            data = data.permute(1, 0, 2, 3).contiguous()  # C x T x H x W
             means.append(data.view(data.shape[0], -1).mean(dim=-1).numpy())
             stds.append(data.view(data.shape[0], -1).std(dim=-1).numpy())
 
@@ -305,7 +324,7 @@ def compute_norm_vals(folder):
 
 
 if __name__ == '__main__':
-    d = S2TSCZCrop_Dataset(folder='/disk2/<username>/S2TSCZCrop', norm=False)
+    d = S2TSCZCrop_Dataset(folder='/disk2/<username>/S2TSCZCrop', norm=True)
     out = d[0]  # (data, dates), target
 
     r1 = d.rasterize_target(0, export=False)
