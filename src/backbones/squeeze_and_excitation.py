@@ -1,18 +1,22 @@
 import torch
 from torch import nn
-from torch import Tensor
-from typing import Union
+
 from torch import Tensor
 from einops.layers.torch import Rearrange, Reduce
 from einops import rearrange
-from src.backbones.positional_encoding import PositionalEncoder
+
 import copy
 import math
+
+from src.backbones.positional_encoding import PositionalEncoder
+
+from src.utils import experimental
 
 
 class SqueezeAndExcitation(nn.Module):
     """
-    Squeeze and excitation module (in channels)
+    Original (kind of) implementation of squeeze & excitation module i.e. squeeze & excitation is
+    performed within channel dimension C
     """
 
     def __init__(self, channel, reduction_ratio=16):
@@ -32,15 +36,18 @@ class SqueezeAndExcitation(nn.Module):
         return x * y.expand_as(x)
 
 
-class SqueezeAndExcitationInTime(nn.Module):
+@experimental
+class SqueezeAndExcitationInTime_v1(nn.Module):
     """
-    Squeeze and excitation module in time (sliding window).
-    Expected input has dimension B x T x C x H x W.
-    It is then patched by kernel of `kernel_size` where first entry is for T (time dim)
-    and second and third entry is for H and W dimensions.
-    Input will be then patched and reduced (average pool) into shape (B*C*H*W) x T
-
+    Proposed variation of original Squeeze & Excitation module.
+    Particularly it is proposed to use similar squeeze and excitation within time dimension T.
     Learned weights are then used to aggregate time series in time dim
+
+    Notes:
+        This is version 1 i.e. using sliding window approach
+        Not fully implemented and tested yet
+        Expected input has dimension B x T x C x H x W.
+
     """
 
     def __init__(self,
@@ -57,7 +64,9 @@ class SqueezeAndExcitationInTime(nn.Module):
         Parameters:
 
         """
-        super(SqueezeAndExcitationInTime, self).__init__()
+        super(SqueezeAndExcitationInTime_v1, self).__init__()
+
+        raise NotImplementedError
 
         self.kernel_size = kernel_size
 
@@ -119,6 +128,7 @@ class SqueezeAndExcitationInTime(nn.Module):
         # TODO implement heads as well
         # TODO instead of reducing with mean in channel dim we can use classical squeeze and excitation in channel
         #  and use learned weights to reduce channels dims
+        raise NotImplementedError
 
         b, t, c, h, w = x.size()  # t dim is only one changing
 
@@ -139,15 +149,18 @@ class SqueezeAndExcitationInTime(nn.Module):
         return torch.matmul(weights, x)
 
 
+@experimental
 class SqueezeAndExcitationInTime_v2(nn.Module):
     """
-    Squeeze and excitation module in time  (adaptive average pool version).
-    Expected input has dimension B x T x C x H x W.
-    It is then patched by kernel of `kernel_size` where first entry is for T (time dim)
-    and second and third entry is for H and W dimensions.
-    Input will be then patched and reduced (average pool) into shape (B*C*H*W) x T
-
+    Proposed variation of original Squeeze & Excitation module.
+    Particularly it is proposed to use similar squeeze and excitation within time dimension T.
     Learned weights are then used to aggregate time series in time dim
+
+    Notes:
+        This is version 2 i.e. using adaptive average pooling strategy
+        Not fully tested yet. But initial experiments show that squeeze and excitation in time does not
+        perform well and it take lot of time to train it
+        Expected input has dimension B x T x C x H x W.
     """
 
     def __init__(self,
@@ -318,15 +331,17 @@ class SqueezeAndExcitationInTime_v2(nn.Module):
         return out, attn
 
 
+@experimental
 class SqueezeAndExcitationInTime_v3(nn.Module):
     """
-    Squeeze and excitation module in time  (fixed linear version).
-    Expected input has dimension B x T x C x H x W.
-    It is then patched by kernel of `kernel_size` where first entry is for T (time dim)
-    and second and third entry is for H and W dimensions.
-    Input will be then patched and reduced (average pool) into shape (B*C*H*W) x T
-
+    Proposed variation of original Squeeze & Excitation module.
+    Particularly it is proposed to use similar squeeze and excitation within time dimension T.
     Learned weights are then used to aggregate time series in time dim
+
+    Notes:
+        This is version 3 i.e. using fixed dimension T and applying linear layer
+        This class is not fully implemented and tested yet
+        Expected input has dimension B x T x C x H x W.
     """
 
     def __init__(self,
@@ -343,6 +358,8 @@ class SqueezeAndExcitationInTime_v3(nn.Module):
 
         """
         super(SqueezeAndExcitationInTime_v3, self).__init__()
+
+        raise NotImplementedError()
 
         self.in_channels = in_channels
         self.mlp = copy.deepcopy(mlp)
@@ -400,171 +417,8 @@ class SqueezeAndExcitationInTime_v3(nn.Module):
         # TODO implement heads as well
         # TODO instead of reducing with mean in channel dim we can use classical squeeze and excitation in channel
         #  and use learned weights to reduce channels dims
+        raise NotImplementedError()
 
         sz_b, t, c = x.size()
 
         # now pad it to size of T with zeros
-
-
-class Attention(nn.Module):
-    def __init__(self, input_size, hidden_size):
-        super(Attention, self).__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, 1)
-
-    def forward(self, x: Tensor) -> (Tensor, Tensor):
-        # x: [B x T x input_size]
-        x_proj = self.fc1(x)  # [B x T x hidden_size]
-        scores = self.fc2(torch.tanh(x_proj))  # [B x T x 1]
-        weights = torch.softmax(scores, dim=1)  # [B x T x 1]
-        attended = torch.sum(weights * x, dim=1)  # [B x input_size]
-        attended = attended.unsqueeze(1)  # [B x 1 x input_size]
-        return attended, weights
-
-
-class MultiHeadAttentionV1(nn.Module):
-    """
-    another attention produced by ChatGPT
-    """
-    def __init__(self, input_dim, hidden_dim, num_heads):
-        super(MultiHeadAttentionV1, self).__init__()
-        self.num_heads = num_heads
-        self.linear_in = nn.Linear(input_dim, hidden_dim * num_heads, bias=False)
-        self.linear_out = nn.Linear(hidden_dim * num_heads, input_dim, bias=False)
-        self.softmax = nn.Softmax(dim=-1)
-
-    def forward(self, x: Tensor, pad_mask: Tensor = None, return_comp: bool = False) -> (Tensor, Tensor):
-        batch_size, seq_len, input_dim = x.size()  # BHW x T x d_in
-
-        # Apply the learned linear projection to create multiple "heads"
-        heads = self.linear_in(x).contiguous().view(batch_size, seq_len, self.num_heads, -1)  # BHW x T x num_heads x d_hidden
-
-        # Compute the attention scores for each head
-        query = torch.tanh(heads)  # BHW x T x num_heads x d_hidden
-        key = torch.tanh(heads)  # BHW x T x num_heads x d_hidden
-        energy = torch.sum(query * key, dim=-1)  # BHW x T x num_heads
-        attn = self.softmax(energy)  # BHW x T x num_head
-
-        attn = rearrange(attn, 'bhw t n_head -> (n_head bhw) t')
-
-        if pad_mask is not None:
-            pad_mask = pad_mask.repeat(
-                (self.num_heads, 1)
-            )  # replicate pad_mask for each head (n_head*B*H*W) x T
-
-            attn = attn.masked_fill(pad_mask, -1e6)
-
-        attn = rearrange(attn, '(n_head bhw) t -> bhw t n_head', n_head=self.num_heads, bhw=batch_size)  # BHW x T x num_heads
-
-        # Apply the attention scores to the input sequence and concatenate the heads
-        weighted_heads = attn.unsqueeze(-1) * heads
-        weighted_sum = weighted_heads.sum(dim=1).contiguous().view(batch_size, -1)  # BHW x d_hidden * num_heads
-
-        # Linearly transform and output the concatenated heads
-        output = self.linear_out(weighted_sum)  # BHW x d_in
-
-        return output, rearrange(attn, 'bhw t n_head -> n_head bhw t')  # rearrange attn to be consistent with LTAE
-
-
-class MultiHeadAttentionV2(nn.Module):
-    """
-    Actually it is mean/mean reduction
-    """
-
-    def __init__(self, d_in, hidden_size, num_heads):
-        super(MultiHeadAttentionV2, self).__init__()
-
-        self.num_heads = num_heads
-        self.hidden_size = hidden_size
-
-        self.fc1 = nn.Linear(d_in, hidden_size * num_heads)
-        self.fc2 = nn.Linear(hidden_size, 1)
-        self.fc_out = nn.Linear(hidden_size * num_heads, d_in)
-
-    def forward(self, v: Tensor, pad_mask=None, return_comp=False) -> (Tensor, Tensor):
-        # x: BHW x T x d_in
-        batch_size, seq_len, d_in = v.size()
-        heads = self.fc1(v).view(batch_size, seq_len, self.num_heads, -1)  # BHW x T x num_heads x hidden_size
-
-        scores = self.fc2(torch.tanh(heads))  # BHW x T x num_heads x 1
-        attn = torch.softmax(scores, dim=1)  # BHW x T x num_heads x 1
-
-        if pad_mask is not None:
-            pad_mask = pad_mask.repeat(
-                (self.num_heads, 1)
-            )  # replicate pad_mask for each head (n_head*B*H*W) x T
-
-            pad_mask = rearrange(pad_mask, '(n_head bhw) t -> bhw t n_head ()', n_head=self.num_heads, bhw=batch_size)
-            # pad_mask shape before is (n_head*B*H*W) x T
-            attn = attn.masked_fill(pad_mask, -1e6)
-
-        # this uses directly input x
-        # out = torch.sum(attn * x.unsqueeze(2), dim=1)  # [B x num_heads x d_in]
-
-        # or we can use
-        out = torch.sum(attn * heads, dim=1)  # [B x num_heads x hidden_size]
-
-        out = out.contiguous().view(batch_size, self.num_heads * self.hidden_size)  # [B x num_heads*hidden_size]
-
-        out = self.fc_out(out)  # [B x d_in]
-
-        return out, attn.squeeze(-1).transpose(0, 1)
-
-
-class MultiHeadAttentionV3(nn.Module):
-    """
-    Another additive attention type generated by chatGPT
-    """
-    def __init__(self, input_size, hidden_size, num_heads):
-        super(MultiHeadAttentionV3, self).__init__()
-        self.num_heads = num_heads
-        self.hidden_size = hidden_size
-        #self.head_size = hidden_size // num_heads
-
-        self.query_projection = nn.Linear(input_size, hidden_size * num_heads, bias=False)
-        self.key_projection = nn.Linear(input_size, hidden_size * num_heads, bias=False)
-        self.value_projection = nn.Linear(input_size, hidden_size * num_heads, bias=False)
-        self.output_projection = nn.Linear(hidden_size * num_heads, input_size, bias=False)
-
-        self.energy_layer = nn.Linear(hidden_size, 1, bias=False)
-
-    def forward(self, x: Tensor, pad_mask=None, return_comp=False) -> (Tensor, Tensor):
-        batch_size, seq_len, input_dim = x.size()  # BHW x T x d_in
-
-        query = self.query_projection(x)  # BHW x T x d_hidden * num_heads
-        key = self.key_projection(x)  # BHW x T x d_hidden * num_heads
-        value = self.value_projection(x)  # BHW x T x d_hidden * num_heads
-
-        # Split the query, key, and value projections into `num_heads` parts
-        query = query.view(batch_size, -1, self.num_heads, self.hidden_size)  # BHW x T x num_heads x d_hidden
-        key = key.view(batch_size, -1, self.num_heads, self.hidden_size)  # BHW x T x num_heads x d_hidden
-        value = value.view(batch_size, -1, self.num_heads, self.hidden_size)  # BHW x T x num_heads x d_hidden
-
-        # Transpose the dimensions for the matrix multiplication
-        query = query.transpose(1, 2)  # BHW x num_heads x T x d_hidden
-        key = key.transpose(1, 2)  # BHW x num_heads x T x d_hidden
-        value = value.transpose(1, 2)  # BHW x num_heads x T x d_hidden
-
-        # Compute the dot product of the query and key vectors
-        energy = torch.tanh(query + key)  # BHW x num_heads x T x d_hidden  # TODO not sure if here should be +
-        energy = self.energy_layer(energy)  # BHW x num_heads x T x 1
-
-        # Apply softmax to get the attention weights
-        attn = torch.softmax(energy, dim=2)  # BHW x num_heads x T x 1
-
-        if pad_mask is not None:
-            pad_mask = pad_mask.repeat(
-                (self.num_heads, 1)
-            )  # replicate pad_mask for each head (n_head*B*H*W) x T
-
-            attn = attn.masked_fill(pad_mask.unsqueeze(-1), -1e6)
-
-        # Compute the context vector as the weighted sum of the value vectors
-        output = (attn * value).sum(dim=2)  # BHW x num_heads x d_hidden
-
-        # Concatenate the heads and project the result
-        output = output.transpose(1, 2)  # BHW x d_hidden x num_heads
-        output = output.contiguous().view(batch_size, -1)  # BHW x d_hidden * num_heads
-        output = self.output_projection(output)  # BHW x d_in
-
-        return output, rearrange(attn, 'bhw n_head t x -> n_head bhw (t x)')  # x=1
