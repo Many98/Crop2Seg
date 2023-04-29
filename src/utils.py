@@ -5,6 +5,8 @@ import torch
 from torch.nn import functional as F
 from torch.utils import data
 
+import warnings
+
 np_str_obj_array_pattern = re.compile(r"[SaUO]")
 
 
@@ -65,3 +67,16 @@ def pad_collate(batch, pad_value=0):
 
 def get_ntrainparams(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+def experimental(cls):
+    """
+    simple class decorator to inform about experimental state of class
+    """
+    class ExperimentalClass(cls):
+
+        def __init__(self, *args, **kwargs):
+            super(ExperimentalClass, self).__init__(*args, **kwargs)
+            warnings.warn(f'class {cls} is experimental therefore does not expect much.')
+
+    return ExperimentalClass
