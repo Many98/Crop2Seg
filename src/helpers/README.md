@@ -17,3 +17,7 @@ Among others can use them to:
 `config` directory
 - To apply Sen2Cor processor one need to install (https://step.esa.int/main/snap-supported-plugins/sen2cor/sen2cor-v2-11/) it prior to use it
   (tested only on Linux)
+
+### Examples
+
+## TODO add examples
