@@ -76,7 +76,7 @@ def experimental(cls):
     class ExperimentalClass(cls):
 
         def __init__(self, *args, **kwargs):
-            super(ExperimentalClass, self).__init__(*args, **kwargs)
+            super().__init__(*args, **kwargs)
             warnings.warn(f'class {cls} is experimental therefore does not expect much.')
 
     return ExperimentalClass
