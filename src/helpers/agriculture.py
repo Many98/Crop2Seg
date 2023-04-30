@@ -3,8 +3,8 @@ import os
 import numpy as np
 import logging
 
-from helpers.utils import WGStoUTM
-from global_vars import AGRI_PATH_DATASET
+from src.helpers.utils import WGStoUTM
+from src.global_vars import AGRI_PATH_DATASET
 
 
 def agri_load(path_dataset=AGRI_PATH_DATASET):
