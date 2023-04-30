@@ -12,7 +12,7 @@ import torch.utils.data as tdata
 logging.getLogger().setLevel(logging.INFO)
 
 
-class PASTIS_Dataset(tdata.Dataset):
+class PASTISDataset(tdata.Dataset):
     def __init__(
         self,
         folder,
@@ -73,7 +73,7 @@ class PASTIS_Dataset(tdata.Dataset):
             sats (list): defines the satellites to use (only Sentinel-2 is available
                 in v1.0)
         """
-        super(PASTIS_Dataset, self).__init__()
+        super(PASTISDataset, self).__init__()
         self.folder = folder
         self.norm = norm
         self.reference_date = datetime(*map(int, reference_date.split("-")))
@@ -323,7 +323,7 @@ def prepare_dates(date_dict, reference_date):
 def compute_norm_vals(folder, sat):
     norm_vals = {}
     for fold in range(1, 6):
-        dt = PASTIS_Dataset(folder=folder, norm=False, folds=[fold], sats=[sat])
+        dt = PASTISDataset(folder=folder, norm=False, folds=[fold], sats=[sat])
         means = []
         stds = []
         for i, b in enumerate(dt):
@@ -342,6 +342,6 @@ def compute_norm_vals(folder, sat):
         file.write(json.dumps(norm_vals, indent=4))
 
 if __name__ == '__main__':
-    d = PASTIS_Dataset('/disk2/<username>/PASTIS')
+    d = PASTISDataset('/disk2/<username>/PASTIS')
     print(d[0])
     print('p')
