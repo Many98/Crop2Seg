@@ -106,8 +106,7 @@ def raster_plot(raster_file, title, cmap='RdYlGn'):
 
 class Sentinel2Raster(object):
     """
-    This class mainly serves as interface to Sentinel2 L2A tiles in .SAFE format but also is used
-    for handling tile rasters generated after supperresolving with neural network (see sentinel.py module)
+    This class mainly serves as interface to Sentinel2 L2A tiles in .SAFE format.
     It will unify raster resolution to 10m by cubic interpolation.
     Everything is done on the fly.
     When reading from Sentinel-2 .SAFE order of channels should be as follows:
