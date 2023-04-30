@@ -3,7 +3,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 import os
-import tensorboard as tb
 import matplotlib.patches as mpatches
 from skimage.exposure import equalize_hist, adjust_gamma, adjust_log
 
@@ -331,23 +330,6 @@ def plot_metrics_from_csv(csv_path, add_epoch):
     train_metrics = iter_aux('train', t)
 
     return plot_learning_history(val_metrics, train_metrics)
-
-
-def plot_tensorboard(experiment_id):
-    """
-
-    Parameters
-    ----------
-    experiment_id: str
-        Tensorboard experiment id at https://tensorboard.dev/experiment/<`experiment_id`>
-
-    Returns
-    -------
-
-    """
-    experiment = tb.data.experimental.ExperimentFromDev(experiment_id)
-    df = experiment.get_scalars(pivot=True)  # contains all scalar logs of the experiment
-    pass
 
 
 def plot_cnn_counts(y, y_test_pred, class_map):
