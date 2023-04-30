@@ -1,6 +1,6 @@
 import os
 import shutil
-from typing import List, Tuple, Union
+from typing import List, Tuple
 from glob import glob
 
 import gc
@@ -31,7 +31,7 @@ sys.path.append(root)
 from src.helpers.sentinel2raster import Sentinel2Raster, tile_coordinates
 from src.helpers.sentinel import sentinel
 
-from src.S2TSCZCrop_dataset import compute_norm_vals
+from src.datasets.s2_ts_cz_crop import compute_norm_vals
 
 from src.global_vars import SENTINEL_PATH_DATASET, AGRI_PATH_DATASET, DATES, CLOUDS, TILES
 
