@@ -341,6 +341,6 @@ def compute_norm_vals(folder, sat):
         file.write(json.dumps(norm_vals, indent=4))
 
 if __name__ == '__main__':
-    d = PASTIS_Dataset('/disk2/fratrik/PASTIS')
+    d = PASTIS_Dataset('/disk2/<username>/PASTIS')
     print(d[0])
     print('p')
