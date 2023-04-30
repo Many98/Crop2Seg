@@ -4,7 +4,7 @@ import seaborn as sns
 import pandas as pd
 import os
 import matplotlib.patches as mpatches
-from skimage.exposure import equalize_hist, adjust_gamma, adjust_log
+from skimage.exposure import adjust_log
 
 # ### small boiler plate to add src to sys path
 import sys
@@ -14,7 +14,7 @@ root = str(file).split('src')[0]
 sys.path.append(root)
 # --------------------------------------
 
-from src.helpers.confusion_matrix_pretty_print import pretty_plot_confusion_matrix
+from src.visualization.confusion_matrix_pretty_print import pretty_plot_confusion_matrix
 
 
 def show(func):

@@ -12,12 +12,10 @@ REFerences:
   http://scikit-learn.org/stable/auto_examples/model_selection/plot_confusion_matrix.html#sphx-glr-auto-examples-model-selection-plot-confusion-matrix-py
 """
 
-# imports
 from pandas import DataFrame
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
-import matplotlib.ticker
 from matplotlib.collections import QuadMesh
 import seaborn as sn
 
