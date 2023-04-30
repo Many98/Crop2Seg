@@ -4,7 +4,7 @@ This directory contains helper modules which are from another project of mine.
 
 They mainly help to process Sentinel data, work with geospatial and raster data and create dataset.
 
-Among others can use them to:
+Among others one can use them to:
 - Download Sentinel-2 (L1C, or L2A) data from https://dhr1.cesnet.cz/ (`sentinel.py`, `sentinel_cli.py`)
 - Download time-series of Sentinel-2 (L1C, or L2A) data (`sentinel.py`, `sentinel_cli.py`)
 - Apply Sen2Cor processor on L1C data (`sentinel_cli.py`)
