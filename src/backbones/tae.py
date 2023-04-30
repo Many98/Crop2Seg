@@ -1,15 +1,26 @@
 import copy
 
+from torch import Tensor
 import numpy as np
 import torch
 import torch.nn as nn
-from einops.layers.torch import Rearrange, Reduce  # TODO implement patched LTAE
+from einops.layers.torch import Rearrange, Reduce
 from einops import reduce, rearrange, repeat
 
 from src.backbones.positional_encoding import PositionalEncoder, AbsolutePositionalEncoder
 
+from src.utils import experimental
+
 
 class TAE2d(nn.Module):
+    """
+    Adjusted original implementation of `L-TAE` (Lightweight Temporal Attention Encoder)
+    Now modified and renamed to `TAE2d` to be more generic.
+    Particularly it now supports original L-TAE (`attention_type='lightweight'`)
+    and temporal attention encoder based on classical Transformer/Attention block (`attention_type='classical'`)
+    When used classical attention block there should be also specified `embedding_reduction` parameter and
+    `attention_mask_reduction` parameter.
+    """
     def __init__(
             self,
             attention_type='lightweight',
@@ -21,6 +32,7 @@ class TAE2d(nn.Module):
             cls_h=16,
             cls_w=16,
             timeunet_flag=False,  # TODO this is specific setting for timeunet_v2
+            # --------------------
             in_channels=128,
             n_head=16,
             d_k=4,
@@ -30,11 +42,12 @@ class TAE2d(nn.Module):
             T=1000,
             return_att=False,
             positional_encoding=True,
+            *args, **kwargs
     ):
         """
         Temporal Attention Encoder (TAE) for image time series.
         Attention-based sequence encoding that maps a sequence of images to a single feature map.
-        A shared TAE(lightweight) is applied to all pixel positions of the image sequence.
+        A shared TAE is applied to all pixel positions of the image sequence.
         Args:
             attention_type (str): Defines type of attention. Currently are possible `lightweight` (original L-TAE)
                                    and `classical` (uses classical MultiHeadAttention)
@@ -54,7 +67,7 @@ class TAE2d(nn.Module):
                                                                    `cls` which uses additional cls token and
                                                                    `linear` which projects sequence using Linear layer
                                                                    `mean` which simply takes average of attention
-                                                                        emebddings
+                                                                        embeddings
                                                 Used only if `attention_type='classical'`
                                                 Default is `cls`
             attention_mask_reduction (None or str): Similarly to `embedding_reduction` parameter specifies how
@@ -133,14 +146,6 @@ class TAE2d(nn.Module):
 
                 for _ in range(self.num_attention_stages)
             )
-
-            # TODO linear is removed
-            '''
-            self.linear = nn.ModuleList(
-                nn.Identity()
-                for _ in range(self.num_attention_stages)
-            )
-            '''
 
             self.embedding_reduction = None
             self.attention_mask_reduction = None
@@ -370,7 +375,8 @@ class TAE2d(nn.Module):
 
 class MultiHeadAttention(nn.Module):
     """
-    Classical Multi-Head Attention module based on github.com/jadore801120/attention-is-all-you-need-pytorch
+    Classical implementation of Multi-Head Attention module
+        based on github.com/jadore801120/attention-is-all-you-need-pytorch
     """
 
     def __init__(self, n_head, d_hidden, d_in, dropout=0.05):
@@ -444,7 +450,9 @@ class MultiHeadAttention(nn.Module):
 
 
 class PositionwiseFeedForward(nn.Module):
-    ''' A two-feed-forward-layer module '''
+    """
+    A two-feed-forward-layer module. Used in classical attention/transformer module
+    """
 
     def __init__(self, d_in, d_hid, dropout=0.1):
         super().__init__()
@@ -467,8 +475,8 @@ class PositionwiseFeedForward(nn.Module):
 
 class LightweightMultiHeadAttention(nn.Module):
     """
-    Ligthweight Multi-Head Attention module
-    Modified from github.com/jadore801120/attention-is-all-you-need-pytorch
+    Implementation of original Lightweight Multi-Head Attention module.
+        Modified from github.com/jadore801120/attention-is-all-you-need-pytorch
     """
 
     def __init__(self, n_head, d_k, d_in):
@@ -537,8 +545,9 @@ class LightweightMultiHeadAttention(nn.Module):
 
 
 class ScaledDotProductAttention(nn.Module):
-    """Scaled Dot-Product Attention
-    Modified from github.com/jadore801120/attention-is-all-you-need-pytorch
+    """
+    Scaled Dot-Product Attention. Used in `LightweightMultiHeadAttention`
+        Modified from github.com/jadore801120/attention-is-all-you-need-pytorch
     """
 
     def __init__(self, temperature, attn_dropout=0.1):
@@ -574,8 +583,9 @@ class ScaledDotProductAttention(nn.Module):
 
 
 class ScaledDotProductAttentionClassical(nn.Module):
-    """Scaled Dot-Product Attention
-    Modified from github.com/jadore801120/attention-is-all-you-need-pytorch
+    """
+    Classical implementation of Scaled Dot-Product Attention
+    Based on github.com/jadore801120/attention-is-all-you-need-pytorch
     """
 
     def __init__(self, temperature, attn_dropout=0.1):
@@ -611,9 +621,13 @@ class ScaledDotProductAttentionClassical(nn.Module):
             return output, attn
 
 
+@experimental
 class MultiHeadAttentionV1(nn.Module):
     """
-    another attention produced by ChatGPT
+    Alternative implementation of MultiHeadAttention (probably additive)
+
+    Notes:
+        This is version 1 of alternative implementations of additive `MultiHeadAttention`
     """
     def __init__(self, input_dim, hidden_dim, num_heads):
         super(MultiHeadAttentionV1, self).__init__()
@@ -655,9 +669,62 @@ class MultiHeadAttentionV1(nn.Module):
         return output, rearrange(attn, 'bhw t n_head -> n_head bhw t')  # rearrange attn to be consistent with LTAE
 
 
+@experimental
+class MultiHeadAttentionV2(nn.Module):
+    """
+    Alternative implementation of MultiHeadAttention (probably additive)
+
+    Notes:
+        This is version 2 of alternative implementations of additive `MultiHeadAttention`
+    """
+
+    def __init__(self, d_in, hidden_size, num_heads):
+        super(MultiHeadAttentionV2, self).__init__()
+
+        self.num_heads = num_heads
+        self.hidden_size = hidden_size
+
+        self.fc1 = nn.Linear(d_in, hidden_size * num_heads)
+        self.fc2 = nn.Linear(hidden_size, 1)
+        self.fc_out = nn.Linear(hidden_size * num_heads, d_in)
+
+    def forward(self, v: Tensor, pad_mask=None, return_comp=False) -> (Tensor, Tensor):
+        # x: BHW x T x d_in
+        batch_size, seq_len, d_in = v.size()
+        heads = self.fc1(v).view(batch_size, seq_len, self.num_heads, -1)  # BHW x T x num_heads x hidden_size
+
+        scores = self.fc2(torch.tanh(heads))  # BHW x T x num_heads x 1
+        attn = torch.softmax(scores, dim=1)  # BHW x T x num_heads x 1
+
+        if pad_mask is not None:
+            pad_mask = pad_mask.repeat(
+                (self.num_heads, 1)
+            )  # replicate pad_mask for each head (n_head*B*H*W) x T
+
+            pad_mask = rearrange(pad_mask, '(n_head bhw) t -> bhw t n_head ()', n_head=self.num_heads, bhw=batch_size)
+            # pad_mask shape before is (n_head*B*H*W) x T
+            attn = attn.masked_fill(pad_mask, -1e6)
+
+        # this uses directly input x
+        # out = torch.sum(attn * x.unsqueeze(2), dim=1)  # [B x num_heads x d_in]
+
+        # or we can use
+        out = torch.sum(attn * heads, dim=1)  # [B x num_heads x hidden_size]
+
+        out = out.contiguous().view(batch_size, self.num_heads * self.hidden_size)  # [B x num_heads*hidden_size]
+
+        out = self.fc_out(out)  # [B x d_in]
+
+        return out, attn.squeeze(-1).transpose(0, 1)
+
+
+@experimental
 class MultiHeadAttentionV3(nn.Module):
     """
-    Another additive attention type generated by chatGPT
+    Alternative implementation of MultiHeadAttention (probably additive)
+
+    Notes:
+        This is version 3 of alternative implementations of additive `MultiHeadAttention`
     """
     def __init__(self, input_size, hidden_size, num_heads):
         super(MultiHeadAttentionV3, self).__init__()
