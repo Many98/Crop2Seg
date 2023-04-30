@@ -3,7 +3,7 @@ import torch.nn as nn
 from einops import repeat
 
 from src.backbones.tae import TAE2d
-from src.backbones.temporal_aggregator import Temporal_Aggregator
+from src.backbones.temporal_aggregator import TemporalAggregator
 from src.backbones.conv import ConvBlock, UpConvBlock, DownConvBlock, DepthwiseSeparableConv2D
 
 from src.backbones.utils import experimental
@@ -158,7 +158,7 @@ class TimeUNet_v1(nn.Module):
             d_k=d_k,
         )
 
-        self.temporal_aggregator = Temporal_Aggregator(mode=agg_mode)
+        self.temporal_aggregator = TemporalAggregator(mode=agg_mode)
 
         self.out_conv = ConvBlock(nkernels=[decoder_widths[0]] + out_conv, padding_mode=padding_mode,
                                   conv_type="2d", add_squeeze=False)  # [32, 32, 20]  | 20 is number of classes in PASTIS
@@ -388,7 +388,7 @@ class TimeUNet_v2(nn.Module):
             d_k=d_k,
         )
 
-        self.temporal_aggregator = Temporal_Aggregator(mode=agg_mode)
+        self.temporal_aggregator = TemporalAggregator(mode=agg_mode)
 
         self.out_conv = ConvBlock(nkernels=[decoder_widths[0]] + out_conv, padding_mode=padding_mode,
                                   conv_type="2d", add_squeeze=False)  # [32, 32, 20]  | 20 is number of classes in PASTIS
@@ -602,7 +602,7 @@ class TimeUNet_v3(nn.Module):
             d_k=d_k,
         )
 
-        self.temporal_aggregator = Temporal_Aggregator(mode=agg_mode)
+        self.temporal_aggregator = TemporalAggregator(mode=agg_mode)
 
         self.out_conv = ConvBlock(nkernels=[decoder_widths[0]] + out_conv, padding_mode=padding_mode,
                                   conv_type="2d",

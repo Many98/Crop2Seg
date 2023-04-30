@@ -7,7 +7,7 @@ import torch.nn as nn
 
 from src.backbones.tae import TAE2d
 from src.backbones.squeeze_and_excitation import SqueezeAndExcitationInTime_v2
-from src.backbones.temporal_aggregator import Temporal_Aggregator, Temporal_Aggregator3D
+from src.backbones.temporal_aggregator import TemporalAggregator, TemporalAggregator3D
 from src.backbones.conv import ConvBlock, UpConvBlock, DownConvBlock
 from src.backbones.mbconv import MBConvBlock, MBUpConvBlock, MBDownConvBlock
 
@@ -179,10 +179,10 @@ class UTAE(nn.Module):
         )
 
         if use_transpose_conv:
-            self.temporal_aggregator = nn.ModuleList(Temporal_Aggregator3D(mode=agg_mode) for _ in
+            self.temporal_aggregator = nn.ModuleList(TemporalAggregator3D(mode=agg_mode) for _ in
                                                      range(self.n_stages - 1))
         else:
-            self.tmp_agg = Temporal_Aggregator(mode=agg_mode)
+            self.tmp_agg = TemporalAggregator(mode=agg_mode)
             self.temporal_aggregator = nn.ModuleList(self.tmp_agg for _ in range(self.n_stages - 1))
 
         self.out_conv = out_conv_block(nkernels=[decoder_widths[0]] + out_conv, padding_mode=padding_mode,
@@ -391,10 +391,10 @@ class USAE(nn.Module):
                                                               d_k=d_k,
                                                               )
 
-        # self.tmp_agg = Temporal_Aggregator(mode=agg_mode)
+        # self.tmp_agg = TemporalAggregator(mode=agg_mode)
         # self.temporal_aggregator = nn.ModuleList(self.tmp_agg for _ in range(self.n_stages - 1))
 
-        self.temporal_aggregator = Temporal_Aggregator(mode=agg_mode)
+        self.temporal_aggregator = TemporalAggregator(mode=agg_mode)
 
         self.out_conv = ConvBlock(nkernels=[decoder_widths[0]] + out_conv, padding_mode=padding_mode,
                                   conv_type="2d",
@@ -615,10 +615,10 @@ class UTAEClassical(nn.Module):
         )
 
         if use_transpose_conv:
-            self.temporal_aggregator = nn.ModuleList(Temporal_Aggregator3D(mode=agg_mode) for _ in
+            self.temporal_aggregator = nn.ModuleList(TemporalAggregator3D(mode=agg_mode) for _ in
                                                      range(self.n_stages - 1))
         else:
-            self.tmp_agg = Temporal_Aggregator(mode=agg_mode)
+            self.tmp_agg = TemporalAggregator(mode=agg_mode)
             self.temporal_aggregator = nn.ModuleList(self.tmp_agg for _ in range(self.n_stages - 1))
 
         self.out_conv = ConvBlock(nkernels=[decoder_widths[0]] + out_conv, padding_mode=padding_mode,
