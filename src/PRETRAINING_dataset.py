@@ -3,13 +3,14 @@ import torch
 import numpy as np
 import random
 import os
-from dataset.data_augmentation import transform
 
 '''
 script taken from 
 https://github.com/linlei1214/SITS-Former/blob/f58e56259621dfff90f27822d31341778440272b/code/dataset/pretrain_dataset.py
 
 '''
+
+# TODO
 
 
 class PretrainDataset(Dataset):
