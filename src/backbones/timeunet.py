@@ -1,13 +1,24 @@
 import torch
 import torch.nn as nn
+from einops import repeat
 
 from src.backbones.tae import TAE2d
 from src.backbones.temporal_aggregator import Temporal_Aggregator
 from src.backbones.conv import ConvBlock, UpConvBlock, DownConvBlock, DepthwiseSeparableConv2D
-from einops import repeat
+
+from src.utils import experimental
 
 
+@experimental
 class TimeUNet_v1(nn.Module):
+    """
+    Modified implementation of UTAE for spatio-temporal encoding of satellite image time series.
+    Modification is that we apply after few shared convolutions right away  `TAE2d`(lightweight) i.e. in feature map
+    with largest resolution.
+    New temporally embedded feature maps are then processed by classical UNet-like convolutional encoder.
+    Notes:
+        This is version 1 of `TimeUNet`
+    """
     def __init__(
             self,
             input_dim,
@@ -26,14 +37,13 @@ class TimeUNet_v1(nn.Module):
             return_maps=False,
             pad_value=0,
             padding_mode="reflect",
+            # ------------------------------
+            # From here starts added arguments
             conv_type='2d',
-            use_transpose_conv=False
+            add_squeeze_excit=False,
+            *args, **kwargs
     ):
         """
-        TimeUnet v1 architecture for spatio-temporal encoding of satellite image time series.
-
-        After few shared convolutions is right away applied LTAE and then this aggregated new embedding is passed
-            via classical UNet architecture
         Args:
             input_dim (int): Number of channels in the input images.
             encoder_widths (List[int]): List giving the number of channels of the successive encoder_widths of the convolutional encoder.
@@ -65,11 +75,14 @@ class TimeUNet_v1(nn.Module):
             return_maps (bool): If true, the feature maps instead of the class scores are returned (default False)
             pad_value (float): Value used by the dataloader for temporal padding.
             padding_mode (str): Spatial padding strategy for convolutional layers (passed to `conv_type`).
+            ------------------------------
+            # From here starts added arguments
             conv_type (str): Defines type of convolution used. Can be one of `2d`, `depthwise_separable`
                                 (default `2d`)
-            use_transpose_conv (bool): Whether to use transpose convolution instead of simple bilinear upsampling
+            add_squeeze_excit (bool): Whether to add squeeze and excitation. Note that is is added only to convolutional
+                                      part of encoder
         """
-        super(TimeUNet_v1, self).__init__()
+        super().__init__()
         self.n_stages = len(encoder_widths)
         self.return_maps = return_maps
         self.encoder_widths = encoder_widths
@@ -83,6 +96,7 @@ class TimeUNet_v1(nn.Module):
         self.pad_value = pad_value
         self.encoder = encoder
         self.conv_type = conv_type
+        self.add_squeeze_excit = add_squeeze_excit
 
         if encoder:
             self.return_maps = True
@@ -100,7 +114,7 @@ class TimeUNet_v1(nn.Module):
             norm=encoder_norm,
             padding_mode=padding_mode,
             conv_type=conv_type,
-            add_squeeze=True
+            add_squeeze=True if add_squeeze_excit else False
         )
 
         self.down_blocks = nn.ModuleList(
@@ -114,7 +128,7 @@ class TimeUNet_v1(nn.Module):
                 norm=encoder_norm,
                 padding_mode=padding_mode,
                 conv_type=conv_type,
-                add_squeeze=True
+                add_squeeze=True if add_squeeze_excit else False
             )
             for i in range(self.n_stages - 1)
         )
@@ -201,7 +215,17 @@ class TimeUNet_v1(nn.Module):
                 return out
 
 
+@experimental
 class TimeUNet_v2(nn.Module):
+    """
+    Modified implementation of UTAE for spatio-temporal encoding of satellite image time series.
+    Modification is that we apply after few shared convolutions  TAE(classical) which generates
+        new embedded sequence of "tokens"
+        which is passed to shared conv layer and then in second stage (resolution/2) is again applied TAE(lightweight).
+        Additionally we use cls token as aggregated representation of sequence which is passed via skip connections
+    Notes:
+        This is version 2 of `TimeUNet`
+    """
     def __init__(
             self,
             input_dim,
@@ -220,31 +244,13 @@ class TimeUNet_v2(nn.Module):
             return_maps=False,
             pad_value=0,
             padding_mode="reflect",
+            # ------------------------------
+            # From here starts added arguments
             conv_type='2d',
-            use_transpose_conv=False
+            add_squeeze_excit=False,
+            *args, **kwargs
     ):
         """
-        TimeUnet v2 architecture for spatio-temporal encoding of satellite image time series.
-
-        After few shared convolutions is right away applied TAE which generates new embedded sequence of "tokens"
-        which is passed to shared conv layer and then in second stage (resolution/2) is again applied TAE.
-        Additionally we use cls token as aggregated representation of sequence which is passed via skip connections
-
-        # architecture described above did not yield good results therefore we changed it to
-          after few shared convs is right away applied TAE which generates new embedded sequence of tokes
-          which are passed to shared conv layer and then in second stage (resolution/2) it continues
-          like normal UTAE but in last dim is again used temporal encoder but now TAE(cls) or LTAE encoder which
-           works as usual and its attention
-          mask is used to perform weighted average of previous stages which are passed to skip connections
-
-        # TODO here we could actually use classical attn and temporal_aggregator
-            to refine previous cls embedding with attn from last temporal encoder
-            or actually we could use as last temp encoder just LTAE
-
-        # TODO we could use patches in first stages e.g. to reduce in H and W dim so we always apply temporal encoder
-            on 16x16 pixels and this new representation will be then repeated in every patch
-
-        We can use one shared TAE in every stage or for every stage new TAE.
         Args:
             input_dim (int): Number of channels in the input images.
             encoder_widths (List[int]): List giving the number of channels of the successive encoder_widths of the convolutional encoder.
@@ -276,11 +282,14 @@ class TimeUNet_v2(nn.Module):
             return_maps (bool): If true, the feature maps instead of the class scores are returned (default False)
             pad_value (float): Value used by the dataloader for temporal padding.
             padding_mode (str): Spatial padding strategy for convolutional layers (passed to `conv_type`).
+            ------------------------------
+            # From here starts added arguments
             conv_type (str): Defines type of convolution used. Can be one of `2d`, `depthwise_separable`
                                 (default `2d`)
-            use_transpose_conv (bool): Whether to use transpose convolution instead of simple bilinear upsampling
+            add_squeeze_excit (bool): Whether to add squeeze and excitation. Note that is is added only to convolutional
+                                      part of encoder
         """
-        super(TimeUNet_v2, self).__init__()
+        super().__init__()
         self.n_stages = len(encoder_widths)
         self.return_maps = return_maps
         self.encoder_widths = encoder_widths
@@ -294,6 +303,7 @@ class TimeUNet_v2(nn.Module):
         self.pad_value = pad_value
         self.encoder = encoder
         self.conv_type = conv_type
+        self.add_squeeze_excit = add_squeeze_excit
 
         if encoder:
             self.return_maps = True
@@ -311,7 +321,7 @@ class TimeUNet_v2(nn.Module):
             norm=encoder_norm,
             padding_mode=padding_mode,
             conv_type=conv_type,
-            add_squeeze=True
+            add_squeeze=True if add_squeeze_excit else False
         )
 
         self.down_blocks = nn.ModuleList(
@@ -325,7 +335,7 @@ class TimeUNet_v2(nn.Module):
                 norm=encoder_norm,
                 padding_mode=padding_mode,
                 conv_type=conv_type,
-                add_squeeze=True
+                add_squeeze=True if add_squeeze_excit else False
             )
             for i in range(self.n_stages - 1)
         )
@@ -345,7 +355,6 @@ class TimeUNet_v2(nn.Module):
             for i in range(self.n_stages - 1, 0, -1)
         )
 
-        resolutions = [128, 64, 32, 16]  # TODO this is hardcoded and should be changed
         self.temporal_encoder_full_resolution = TAE2d(
             attention_type='classical',
             cls_h=128,
@@ -436,7 +445,18 @@ class TimeUNet_v2(nn.Module):
                 return out
 
 
+@experimental
 class TimeUNet_v3(nn.Module):
+    """
+    Modified implementation of UTAE for spatio-temporal encoding of satellite image time series.
+    Modification is that we apply after few shared convolutions right away  `TAE2d` (classical) i.e. in feature map
+     with largest resolution which generates new embedded sequence of "tokens".
+    New temporally embedded feature maps are then processed by classical UNet-like convolutional encoder.
+
+    Notes:
+        This is version 3 of `TimeUNet`
+        Almost same as version 1 but in this version is used classical TAE instead of lightweight
+    """
     def __init__(
             self,
             input_dim,
@@ -455,26 +475,53 @@ class TimeUNet_v3(nn.Module):
             return_maps=False,
             pad_value=0,
             padding_mode="reflect",
+            # ------------------------------
+            # From here starts added arguments
             conv_type='2d',
-            use_transpose_conv=False
+            add_squeeze_excit=False,
+            *args, **kwargs
     ):
         """
-        TimeUnet v3 architecture for spatio-temporal encoding of satellite image time series.
-
-        After few shared convolutions is right away applied TAE which generates new embedded sequence of "tokens"
-        similar to v1 but uses TAE and cls token
-
-        # TODO we could use patching 2x2 maybe when there will be merged local info it will perform better
-
-        # TODO propose some another tweaks
-        # TODO here we could actually use classical attn and temporal_aggregator
-        #  to refine previous cls embedding with attn from last temporal encoder
-        #  or actually we could use as last temp encoder just LTAE
-
-        We can use one shared TAE in every stage or for every stage new TAE.
+        Args:
+            input_dim (int): Number of channels in the input images.
+            encoder_widths (List[int]): List giving the number of channels of the successive encoder_widths of the convolutional encoder.
+            This argument also defines the number of encoder_widths (i.e. the number of downsampling steps +1)
+            in the architecture.
+            The number of channels are given from top to bottom, i.e. from the highest to the lowest resolution.
+            decoder_widths (List[int], optional): Same as encoder_widths but for the decoder. The order in which the number of
+            channels should be given is also from top to bottom. If this argument is not specified the decoder
+            will have the same configuration as the encoder.
+            out_conv (List[int]): Number of channels of the successive convolutions for the
+            str_conv_k (int): Kernel size of the strided up and down convolutions.
+            str_conv_s (int): Stride of the strided up and down convolutions.
+            str_conv_p (int): Padding of the strided up and down convolutions.
+            agg_mode (str): Aggregation mode for the skip connections. Can either be:
+                - att_group (default) : Attention weighted temporal average, using the same
+                channel grouping strategy as in the LTAE. The attention masks are bilinearly
+                resampled to the resolution of the skipped feature maps.
+                - att_mean : Attention weighted temporal average,
+                 using the average attention scores across heads for each date.
+                - mean : Temporal average excluding padded dates.
+            encoder_norm (str): Type of normalisation layer to use in the encoding branch. Can either be:
+                - group : GroupNorm (default)
+                - batch : BatchNorm
+                - instance : InstanceNorm
+            n_head (int): Number of heads in LTAE.
+            d_model (int): Parameter of LTAE
+            d_k (int): Key-Query space dimension
+            encoder (bool): If true, the feature maps instead of the class scores are returned (default False)
+            return_maps (bool): If true, the feature maps instead of the class scores are returned (default False)
+            pad_value (float): Value used by the dataloader for temporal padding.
+            padding_mode (str): Spatial padding strategy for convolutional layers (passed to `conv_type`).
+            ------------------------------
+            # From here starts added arguments
+            conv_type (str): Defines type of convolution used. Can be one of `2d`, `depthwise_separable`
+                                (default `2d`)
+            add_squeeze_excit (bool): Whether to add squeeze and excitation. Note that is is added only to convolutional
+                                      part of encoder
         """
 
-        super(TimeUNet_v3, self).__init__()
+        super().__init__()
         self.n_stages = len(encoder_widths)
         self.return_maps = return_maps
         self.encoder_widths = encoder_widths
@@ -488,6 +535,7 @@ class TimeUNet_v3(nn.Module):
         self.pad_value = pad_value
         self.encoder = encoder
         self.conv_type = conv_type
+        self.add_squeeze_excit = add_squeeze_excit
 
         if encoder:
             self.return_maps = True
@@ -505,7 +553,7 @@ class TimeUNet_v3(nn.Module):
             norm=encoder_norm,
             padding_mode=padding_mode,
             conv_type=conv_type,
-            add_squeeze=True
+            add_squeeze=True if add_squeeze_excit else False
         )
 
         self.down_blocks = nn.ModuleList(
@@ -519,7 +567,7 @@ class TimeUNet_v3(nn.Module):
                 norm=encoder_norm,
                 padding_mode=padding_mode,
                 conv_type=conv_type,
-                add_squeeze=True
+                add_squeeze=True if add_squeeze_excit else False
             )
             for i in range(self.n_stages - 1)
         )
