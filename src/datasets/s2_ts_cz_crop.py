@@ -26,7 +26,8 @@ logging.getLogger().setLevel(logging.INFO)
 
 class S2TSCZCropDataset(tdata.Dataset):
     """
-    Pytorch Dataset class to load samples from the S2TSCZCrop dataset for semantic segmentation.
+    Pytorch Dataset class to load samples from the S2TSCZCrop dataset for semantic segmentation of crop types
+    from in time-series of Sentinel-2 tiles over Czech republic
     The Dataset yields ((data, dates), target) tuples, where:
         - data contains the image time series
         - dates contains the date sequence of the observations expressed in number

@@ -13,7 +13,11 @@ https://github.com/linlei1214/SITS-Former/blob/f58e56259621dfff90f27822d31341778
 # TODO
 
 
-class S2PretrainDataset(Dataset):
+class S2TSPretrainDataset(Dataset):
+    """
+    Pytorch Dataset class to load samples from the S2Pretrain dataset for pretraining models on
+     time-series of Sentinel-2 tiles
+    """
     def __init__(self, file_path, num_features, patch_size, max_length, norm=None, mask_rate=0.15):
         """
         :param file_path: path to the folder of the pre-training dataset
