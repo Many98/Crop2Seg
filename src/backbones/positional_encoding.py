@@ -4,7 +4,7 @@ import einops
 import torch.nn.functional as F
 from einops import rearrange
 
-from src.utils import experimental
+from src.backbones.utils import experimental
 
 
 class PositionalEncoder(nn.Module):

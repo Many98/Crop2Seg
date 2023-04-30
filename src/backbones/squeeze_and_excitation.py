@@ -10,7 +10,7 @@ import math
 
 from src.backbones.positional_encoding import PositionalEncoder
 
-from src.utils import experimental
+from src.backbones.utils import experimental
 
 
 class SqueezeAndExcitation(nn.Module):

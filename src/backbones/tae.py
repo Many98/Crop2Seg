@@ -9,7 +9,7 @@ from einops import reduce, rearrange, repeat
 
 from src.backbones.positional_encoding import PositionalEncoder, AbsolutePositionalEncoder
 
-from src.utils import experimental
+from src.backbones.utils import experimental
 
 
 class TAE2d(nn.Module):

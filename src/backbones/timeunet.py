@@ -6,7 +6,7 @@ from src.backbones.tae import TAE2d
 from src.backbones.temporal_aggregator import Temporal_Aggregator
 from src.backbones.conv import ConvBlock, UpConvBlock, DownConvBlock, DepthwiseSeparableConv2D
 
-from src.utils import experimental
+from src.backbones.utils import experimental
 
 
 @experimental

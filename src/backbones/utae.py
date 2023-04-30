@@ -11,7 +11,7 @@ from src.backbones.temporal_aggregator import Temporal_Aggregator, Temporal_Aggr
 from src.backbones.conv import ConvBlock, UpConvBlock, DownConvBlock
 from src.backbones.mbconv import MBConvBlock, MBUpConvBlock, MBDownConvBlock
 
-from src.utils import experimental
+from src.backbones.utils import experimental
 
 
 class UTAE(nn.Module):

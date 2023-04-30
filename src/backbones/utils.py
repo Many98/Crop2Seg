@@ -1,3 +1,14 @@
+import warnings
+
+# ### small boiler plate to add src to sys path
+import sys
+from pathlib import Path
+
+file = Path(__file__).resolve()
+root = str(file).split('src')[0]
+sys.path.append(root)
+# --------------------------------------
+
 from src.backbones.utae import UTAE
 from src.backbones.unet3d import UNet3D
 
@@ -33,3 +44,16 @@ def get_model(config):
             in_channel=10, n_classes=config.num_classes, pad_value=config.pad_value
         )
     return model
+
+
+def experimental(cls):
+    """
+    simple class decorator to inform about experimental state of class
+    """
+    class ExperimentalClass(cls):
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            warnings.warn(f'class {cls} is experimental therefore does not expect much.')
+
+    return ExperimentalClass

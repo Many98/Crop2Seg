@@ -7,7 +7,7 @@ from einops import reduce, rearrange, repeat
 from src.backbones.squeeze_and_excitation import SqueezeAndExcitation
 from src.backbones.temp_shared_block import TemporallySharedBlock
 
-from src.utils import experimental
+from src.backbones.utils import experimental
 
 
 class DepthwiseSeparableConv2D(nn.Module):
