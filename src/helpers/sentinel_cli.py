@@ -137,13 +137,13 @@ if __name__ == "__main__":
         ),
     )
     #  Superresolution specific args
-    parser.add_argument(
-        "--superresolve",
-        action='store_true',
-        help=(
-            'Whether to superresolution using DSen2 model on Sentinel-2 tiles to 10m'
-        ),
-    )
+    #parser.add_argument(
+    #    "--superresolve",
+    #    action='store_true',
+    #    help=(
+    #        'Whether to superresolution using DSen2 model on Sentinel-2 tiles to 10m'
+    #    ),
+    #)
     parser.add_argument(
         "--copy_original_bands",
         action='store_true',
@@ -171,21 +171,22 @@ if __name__ == "__main__":
         a = re.findall("\d+\.\d+", args.polygon)
         b = np.array([[a[2 * i], a[2 * i + 1]] for i in range(len(a) // 2)])
         args.polygon = b
-        print('NOW PERFORMING DOWNLOAD... \n')
+        logging.info('DOWNLOADING DATA... \n')
         sentinel(args.polygon, args.tile_name, args.count, args.platformname,
                  args.producttype, args.filename, args.beginposition,
                  args.cloudcoverpercentage, args.polarisationmode,
                  args.sensoroperationalmode,
                  path_to_save=SENTINEL_PATH_DATASET)
     if args.s2_time_series:
-        print('NOW PERFORMING DOWNLOAD OF S2 TIMESERIES... \n')
+        logging.info('DOWNLOADING S2 TIMESERIES... \n')
         time_series_s2(args.count, args.producttype)
     if args.sen2cor:
-        print('NOW APPLYING SEN2COR... \n')
+        logging.info('APPLYING SEN2COR... \n')
         sentinel_sen2cor(path_dataset=SENTINEL_PATH_DATASET, n_jobs=args.n_jobs, inplace=args.inplace,
                          sen2cor_path=SEN2COR)
+    '''
     if args.superresolve:
-        print('NOW APPLYING SUPERRESOLUTION... \n')
+        logging.info('APPLYING SUPERRESOLUTION... \n')
         if args.copy_original_bands and not args.inplace:
             subprocess.call(
                 ['python3', 'helpers/DSen2/testing/s2_tiles_supres.py',  # TODO fix this problem with relative path
@@ -205,9 +206,5 @@ if __name__ == "__main__":
             subprocess.call(
                 ['python3', 'helpers/DSen2/testing/s2_tiles_supres.py',  # TODO fix this problem with relative path
                  SENTINEL_PATH_DATASET])
-    print('All operations completed succesfully!')
-
-    # TODO add generating dataset and classification procedures as options | but maybe it would be better
-    #  to do so in their specific modules 'cause e.g. creation of dataset needs secondary reference data download
-    #   which is not handled by any function but must be performed 'by hand'
-    # TODO add more error checks | tests would be much appreciated
+    '''
+    logging.info('All operations completed succesfully!')
