@@ -25,6 +25,7 @@ class PASTIS_Dataset(tdata.Dataset):
         class_mapping=None,
         mono_date=None,
         sats=["S2"],
+        *args, **kwargs
     ):
         """
         Pytorch Dataset class to load samples from the PASTIS dataset, for semantic and
