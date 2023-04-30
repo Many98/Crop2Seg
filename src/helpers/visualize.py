@@ -113,7 +113,7 @@ def plot_band(channel, band, path_tile):
     -------
 
     """
-    from sentinel import sentinel_load_channel
+    from src.helpers.sentinel import sentinel_load_channel
 
     band_ = sentinel_load_channel(path_tile, channel=channel, band=band)
 
@@ -142,7 +142,7 @@ def plot_mask(mask_type, path_tile):
 
     """
 
-    from sentinel import sentinel_load_clouds
+    from src.helpers.sentinel import sentinel_load_clouds
 
     mask = sentinel_load_clouds(path_tile, mask_type=mask_type)
 
@@ -169,7 +169,7 @@ def plot_polarisation(path_tile, polarisation):
     -------
 
     """
-    from sentinel import sentinel_load_measurement
+    from src.helpers.sentinel import sentinel_load_measurement
     polar = sentinel_load_measurement(path_tile, polarisation=polarisation)
 
     if polar.size > 0:
@@ -179,24 +179,6 @@ def plot_polarisation(path_tile, polarisation):
 
     else:
         print('Wrong parameters have been passed')
-
-
-@show
-def visualize_crop_counts(labels):
-    """Visualizes counts of crop within a dataset. 
-    Parameters
-    ----------
-    labels : list
-        third output from Dataset().load()
-        list of information about fields, crop name is stored in [field_index][0][3]
-    """
-    crop_list = np.empty((len(labels),), dtype=object)
-    for idx in range(len(labels)):
-        crop_list[idx] = labels[idx][0][3]
-
-    fig = plt.figure(figsize=(20, 10))
-    sns.countplot(sorted(crop_list))
-    return fig
 
 
 def plot_cnn_history(history):
@@ -783,34 +765,6 @@ def plot_feature_importances(importances, std, indices, num_features):
     return fig
 
 
-def plot_permutation_importances(importances, indices, type):
-    """
-    Plots permutation importances
-    Parameters
-    ----------
-    importances : np.array
-    indices : np.array
-    type : str
-        test or train
-    Returns
-    -------
-
-    """
-    fig, ax = plt.subplots(figsize=(8, 16))
-    features_names = ('B02', 'B02', 'B03', 'B03', 'B04', 'B04', 'B05', 'B05', 'B06', 'B06', 'B07',
-                      'B07', 'B11', 'B11', 'B12', 'B12', 'B8A', 'B8A', 'NDVI', 'NDVI', 'NDMI', 'NDMI',
-                      'NDWI', 'NDWI', 'NDBI', 'NDBI', 'NBRI', 'NBRI')
-    names = np.array([name + '_mean' if i % 2 == 0 else name + '_std' for i, name in enumerate(features_names)])
-    ax.boxplot(importances.importances[indices].T, labels=names[indices], vert=False)
-
-    ax.set_title(f"Permutation importances ({type} set)")
-    # ax.set_title(f"Permutačná dôležitosť prediktora v ({type} datasete)")
-    ax.set_xlabel('Importance')  # ax.set_xlabel('Dôležitosť')
-    ax.set_ylabel('Feature')  # ax.set_ylabel('Prediktor')
-
-    return fig
-
-
 def plot_cnn_confusion_matrix(confusion_matrix, classes, normalize=False, scientific=False, fz=12,
                               annot=True,
                               cmap='Blues', print_IoU=False, title='Confusion matrix', figsize=[25, 25],
@@ -956,16 +910,5 @@ def plot_rgb(data):
     ax.axes.xaxis.set_visible(False)
     return fig
 
-
-def plot_bulc_pixel(data, labels, cmap):
-    #patches = [mpatches.Patch(color=cmap[i], label=label) for i, label in enumerate(labels)]
-    data = data.transpose(1, 0)
-    fig, ax = plt.subplots(figsize=(9, 6))
-    for i, j in enumerate(data):
-        ax.plot(j, '-o', label=labels[i], color=cmap[i])
-
-    ax.legend()
-
-    return fig
 
 # TODO get some inspiration -> https://datavizproject.com/
