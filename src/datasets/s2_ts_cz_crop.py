@@ -39,7 +39,7 @@ class S2TSCZCropDataset(tdata.Dataset):
             self,
             folder,
             norm=True,
-            norm_values_folder="",
+            norm_values=None,
             cache=False,
             mem16=False,
             folds=None,
@@ -57,8 +57,9 @@ class S2TSCZCropDataset(tdata.Dataset):
             norm (bool): If true, images are standardised using pre-computed
                 channel-wise means and standard deviations.
                 When Use `norm_values_folder` argument instead
-            norm_values_folder (str or None): Path to folder (directory) where to look for NORM_S2_patch.json
-                                     file storing normalization values. Used only of norm is set to true
+            norm_values (dict): Defines normalization values for dataset
+                {"mean": [...], "std": [...]}
+                                Used only of norm is set to true
             reference_date (str, Format : 'YYYY-MM-DD'): Defines the reference date
                 based on which all observation dates are expressed. Along with the image
                 time series and the target tensor, this dataloader yields the sequence
@@ -91,7 +92,7 @@ class S2TSCZCropDataset(tdata.Dataset):
         super().__init__()
         self.folder = folder
         self.norm = norm
-        self.norm_values_folder = norm_values_folder
+        self.norm_values = norm_values
         self.reference_date = datetime(*map(int, reference_date.split("-")))
 
         # simple fix to get same order of channels like in PASTIS dataset
@@ -169,6 +170,9 @@ class S2TSCZCropDataset(tdata.Dataset):
 
         # Get normalisation values
         if norm:
+            if norm_values is None or not isinstance(norm_values, dict):
+                raise Exception(f"Norm parameter set to True but normalization values are not provided.")
+            '''
             if not os.path.isfile(os.path.join(norm_values_folder, "NORM_S2_patch.json")):
                 raise Exception(f"Norm parameter set to True but normalization values json file for dataset was "
                                 f"not found in specified directory {norm_values_folder} .")
@@ -183,10 +187,16 @@ class S2TSCZCropDataset(tdata.Dataset):
             means = [normvals[f"Fold_{f}"]["mean"] for f in selected_folds]
             stds = [normvals[f"Fold_{f}"]["std"] for f in selected_folds]
             self.norm['S2'] = np.stack(means).mean(axis=0), np.stack(stds).mean(axis=0)
+            
             self.norm['S2'] = (
                 torch.from_numpy(self.norm['S2'][0]).float()[self.channels_order],
                 torch.from_numpy(self.norm['S2'][1]).float()[self.channels_order],
             )
+            '''
+            self.norm = {'S2': (
+                torch.from_numpy(norm_values['mean']).float(),
+                torch.from_numpy(norm_values['std']).float(),
+            )}
         else:
             self.norm = None
         logging.info("Dataset ready.")
