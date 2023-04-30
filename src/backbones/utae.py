@@ -11,8 +11,15 @@ from src.backbones.temporal_aggregator import Temporal_Aggregator, Temporal_Aggr
 from src.backbones.conv import ConvBlock, UpConvBlock, DownConvBlock
 from src.backbones.mbconv import MBConvBlock, MBUpConvBlock, MBDownConvBlock
 
+from src.utils import experimental
+
 
 class UTAE(nn.Module):
+    """
+    Original (slightly modified) implementation of U-TAE architecture for spatio-temporal encoding of
+    satellite image time series.
+    """
+
     def __init__(
             self,
             input_dim,
@@ -31,13 +38,15 @@ class UTAE(nn.Module):
             return_maps=False,
             pad_value=0,
             padding_mode="reflect",
+            # ------------------------------
+            # From here starts added arguments
             conv_type='2d',
             use_transpose_conv=False,
-            # ,#use_double_stage=False
-            use_mbconv=False
+            use_mbconv=False,
+            add_squeeze_excit=False,
+            *args, **kwargs
     ):
         """
-        U-TAE architecture for spatio-temporal encoding of satellite image time series.
         Args:
             input_dim (int): Number of channels in the input images.
             encoder_widths (List[int]): List giving the number of channels of the successive encoder_widths of the convolutional encoder.
@@ -69,11 +78,14 @@ class UTAE(nn.Module):
             return_maps (bool): If true, the feature maps instead of the class scores are returned (default False)
             pad_value (float): Value used by the dataloader for temporal padding.
             padding_mode (str): Spatial padding strategy for convolutional layers (passed to `conv_type`).
+            ------------------------------
+            # From here starts added arguments
             conv_type (str): Defines type of convolution used. Can be one of `2d`, `depthwise_separable`
                                 (default `2d`)
             use_transpose_conv (bool): Whether to use transpose convolution instead of simple bilinear upsampling
-            use_double_stage (bool): Whether to use 2 temporal encoders
             use_mbconv (bool): Whether to use MBConv blocks instead of classical conv blocks
+            add_squeeze_excit (bool): Whether to add squeeze and excitation. Note that is is added only to convolutional
+                                      part of encoder
         """
         super(UTAE, self).__init__()
         self.n_stages = len(encoder_widths)
@@ -90,8 +102,9 @@ class UTAE(nn.Module):
         self.encoder = encoder
         self.conv_type = conv_type
         self.use_transpose_conv = use_transpose_conv
-        # self.use_double_stage = use_double_stage
+
         self.use_mbconv = use_mbconv
+        self.add_squeeze_excit = add_squeeze_excit
 
         if use_mbconv:
             in_conv_block = MBConvBlock
@@ -120,7 +133,7 @@ class UTAE(nn.Module):
             norm=encoder_norm,
             padding_mode=padding_mode,
             conv_type=conv_type,
-            add_squeeze=True
+            add_squeeze=True if add_squeeze_excit else False
         )
 
         self.down_blocks = nn.ModuleList(
@@ -134,7 +147,7 @@ class UTAE(nn.Module):
                 norm=encoder_norm,
                 padding_mode=padding_mode,
                 conv_type=conv_type,
-                add_squeeze=True
+                add_squeeze=True if add_squeeze_excit else False
             )
             for i in range(self.n_stages - 1)
         )
@@ -228,7 +241,17 @@ class UTAE(nn.Module):
                 return out
 
 
+@experimental
 class USAE(nn.Module):
+    """
+    U-SAE (modified UTAE) architecture for spatio-temporal encoding of satellite image time series.
+    Particularly it replaces `TAE2d` with proposed `SqueezeAndExcitationInTime` module.
+
+    Notes:
+        This is experimental module
+        Initial experiments resulted in unsatisfactory results (tested on PASTIS)
+    """
+
     def __init__(
             self,
             input_dim,
@@ -247,12 +270,13 @@ class USAE(nn.Module):
             return_maps=False,
             pad_value=0,
             padding_mode="reflect",
+            # ------------------------------
+            # From here starts added arguments
             conv_type='2d',
-            use_transpose_conv=False
+            add_squeeze_excit=False,
+            *args, **kwargs
     ):
         """
-        U-SAE architecture for spatio-temporal encoding of satellite image time series.
-            Using SqueezeAndExcitationInTime module instead of TAE
         Args:
             input_dim (int): Number of channels in the input images.
             encoder_widths (List[int]): List giving the number of channels of the successive encoder_widths of the convolutional encoder.
@@ -284,9 +308,12 @@ class USAE(nn.Module):
             return_maps (bool): If true, the feature maps instead of the class scores are returned (default False)
             pad_value (float): Value used by the dataloader for temporal padding.
             padding_mode (str): Spatial padding strategy for convolutional layers (passed to `conv_type`).
+            ------------------------------
+            # From here starts added arguments
             conv_type (str): Defines type of convolution used. Can be one of `2d`, `depthwise_separable`
                                 (default `2d`)
-            use_transpose_conv (bool): Whether to use transpose convolution instead of simple bilinear upsampling
+            add_squeeze_excit (bool): Whether to add squeeze and excitation. Note that is is added only to convolutional
+                                      part of encoder
 
         """
         super(USAE, self).__init__()
@@ -303,7 +330,7 @@ class USAE(nn.Module):
         self.pad_value = pad_value
         self.encoder = encoder
         self.conv_type = conv_type
-        self.use_transpose_conv = use_transpose_conv
+        self.add_squeeze_excit = add_squeeze_excit
 
         if encoder:
             self.return_maps = True
@@ -321,7 +348,7 @@ class USAE(nn.Module):
             norm=encoder_norm,
             padding_mode=padding_mode,
             conv_type=conv_type,
-            add_squeeze=True
+            add_squeeze=True if add_squeeze_excit else False
         )
 
         self.down_blocks = nn.ModuleList(
@@ -335,7 +362,7 @@ class USAE(nn.Module):
                 norm=encoder_norm,
                 padding_mode=padding_mode,
                 conv_type=conv_type,
-                add_squeeze=True
+                add_squeeze=True if add_squeeze_excit else False
             )
             for i in range(self.n_stages - 1)
         )
@@ -364,12 +391,10 @@ class USAE(nn.Module):
                                                               d_k=d_k,
                                                               )
 
-        if use_transpose_conv:
-            self.temporal_aggregator = nn.ModuleList(Temporal_Aggregator3D(mode=agg_mode) for _ in
-                                                     range(self.n_stages - 1))
-        else:
-            self.tmp_agg = Temporal_Aggregator(mode=agg_mode)
-            self.temporal_aggregator = nn.ModuleList(self.tmp_agg for _ in range(self.n_stages - 1))
+        # self.tmp_agg = Temporal_Aggregator(mode=agg_mode)
+        # self.temporal_aggregator = nn.ModuleList(self.tmp_agg for _ in range(self.n_stages - 1))
+
+        self.temporal_aggregator = Temporal_Aggregator(mode=agg_mode)
 
         self.out_conv = ConvBlock(nkernels=[decoder_widths[0]] + out_conv, padding_mode=padding_mode,
                                   conv_type="2d",
@@ -402,7 +427,7 @@ class USAE(nn.Module):
 
         for i in range(self.n_stages - 1):
 
-            skip, atten = self.temporal_aggregator[i](
+            skip, atten = self.temporal_aggregator(
                 feature_maps[-(i + 2)], pad_mask=pad_mask, attn_mask=atten  # they use just attention masks
             )
 
@@ -427,7 +452,18 @@ class USAE(nn.Module):
                 return out
 
 
+@experimental
 class UTAEClassical(nn.Module):
+    """
+    Modification of original U-TAE architecture for spatio-temporal encoding of satellite image time series.
+    Particularly this implementation uses temporal encoding based on classical transformer/attention module
+    (not original Lightweight attention).
+
+    Notes:
+        It was mainly used for enhancement experiments but early results indicate that use of classical attention
+        does not enhance performance (tested on PASTIS)
+    """
+
     def __init__(
             self,
             input_dim,
@@ -446,12 +482,14 @@ class UTAEClassical(nn.Module):
             return_maps=False,
             pad_value=0,
             padding_mode="reflect",
+            # ------------------------------
+            # From here starts added arguments
             conv_type='2d',
             use_transpose_conv=False,
-            add_squeeze=False
+            add_squeeze_excit=False,
+            *args, **kwargs
     ):
         """
-        U-TAE architecture for spatio-temporal encoding of satellite image time series.
         Args:
             input_dim (int): Number of channels in the input images.
             encoder_widths (List[int]): List giving the number of channels of the successive encoder_widths of the convolutional encoder.
@@ -483,11 +521,13 @@ class UTAEClassical(nn.Module):
             return_maps (bool): If true, the feature maps instead of the class scores are returned (default False)
             pad_value (float): Value used by the dataloader for temporal padding.
             padding_mode (str): Spatial padding strategy for convolutional layers (passed to `conv_type`).
+            ------------------------------
+            # From here starts added arguments
             conv_type (str): Defines type of convolution used. Can be one of `2d`, `depthwise_separable`
                                 (default `2d`)
             use_transpose_conv (bool): Whether to use transpose convolution instead of simple bilinear upsampling
-            use_double_stage (bool): Whether to use 2 temporal encoders
-            add_squeeze (bool): Whether to add squeeze and excitation block
+            add_squeeze_excit (bool): Whether to add squeeze and excitation. Note that is is added only to convolutional
+                                      part of encoder
         """
         super(UTAEClassical, self).__init__()
         self.n_stages = len(encoder_widths)
@@ -504,7 +544,7 @@ class UTAEClassical(nn.Module):
         self.encoder = encoder
         self.conv_type = conv_type
         self.use_transpose_conv = use_transpose_conv
-        self.add_squeeze = add_squeeze
+        self.add_squeeze = add_squeeze_excit
 
         if encoder:
             self.return_maps = True
@@ -522,7 +562,7 @@ class UTAEClassical(nn.Module):
             norm=encoder_norm,
             padding_mode=padding_mode,
             conv_type=conv_type,
-            add_squeeze=True  # TODO Add squeeze hardcoded
+            add_squeeze=True if add_squeeze_excit else False
         )
 
         self.down_blocks = nn.ModuleList(
@@ -536,7 +576,7 @@ class UTAEClassical(nn.Module):
                 norm=encoder_norm,
                 padding_mode=padding_mode,
                 conv_type=conv_type,
-                add_squeeze=True  # TODO add squeeze hardcoded
+                add_squeeze=True if add_squeeze_excit else False
             )
             for i in range(self.n_stages - 1)
         )
@@ -557,12 +597,15 @@ class UTAEClassical(nn.Module):
         )
 
         self.temporal_encoder = TAE2d(
-            attention_type='classical',
+            attention_type='classical',  # TODO manually set this few attributes
             attention_mask_reduction='cls',
             embedding_reduction='cls',
-            num_attention_stages=1,  # TODO here we use 3 attention stages
+            num_attention_stages=1,
             num_cls_tokens=10,
-            stack_stages=False,  # TODO here we stack all stages
+            stack_stages=False,
+            cls_h=16,
+            cls_w=16,
+
             in_channels=encoder_widths[-1],  # 128
             d_model=d_model,
             n_head=n_head,
