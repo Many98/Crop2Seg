@@ -5,6 +5,15 @@ import os
 
 from typing import Tuple, Union
 
+# ### small boiler plate to add src to sys path
+import sys
+from pathlib import Path
+
+file = Path(__file__).resolve()
+root = str(file).split('src')[0]
+sys.path.append(root)
+# --------------------------------------
+
 from src.helpers.dataset_creator import DatasetCreator
 from src.helpers.sentinel2raster import export_to_tif
 
