@@ -19,16 +19,26 @@ root = str(file).split('src')[0]
 sys.path.append(root)
 # --------------------------------------
 
-from src.helpers.dataset_creator import DatasetCreator
+from src.helpers.utils import unpatchify
 
 logging.getLogger().setLevel(logging.INFO)
 
 
-class S2TSCZCrop_Dataset(tdata.Dataset):
+class S2TSCZCropDataset(tdata.Dataset):
+    """
+    Pytorch Dataset class to load samples from the S2TSCZCrop dataset for semantic segmentation.
+    The Dataset yields ((data, dates), target) tuples, where:
+        - data contains the image time series
+        - dates contains the date sequence of the observations expressed in number
+          of days since a reference date
+        - target is the semantic or instance target
+    TODO adjust it to handle also pretrain dataset ... difference should be only in loading TARGET
+    """
     def __init__(
             self,
             folder,
             norm=True,
+            norm_values_folder="",
             cache=False,
             mem16=False,
             folds=None,
@@ -37,20 +47,17 @@ class S2TSCZCrop_Dataset(tdata.Dataset):
             mono_date=None,
             from_date=None,
             to_date=None,
-            channels_like_pastis=True
+            channels_like_pastis=True,
+            *args, **kwargs
     ):
         """
-        TODO adjust it to handle also pretrain dataset ... difference should be only in loading TARGET
-        Pytorch Dataset class to load samples from the S2TSCZCrop dataset for semantic segmentation.
-        The Dataset yields ((data, dates), target) tuples, where:
-            - data contains the image time series
-            - dates contains the date sequence of the observations expressed in number
-              of days since a reference date
-            - target is the semantic or instance target
         Args:
-            folder (str): Path to the dataset
+            folder (str): Path to the dataset folder (directory)
             norm (bool): If true, images are standardised using pre-computed
                 channel-wise means and standard deviations.
+                When Use `norm_values_folder` argument instead
+            norm_values_folder (str or None): Path to folder (directory) where to look for NORM_S2_patch.json
+                                     file storing normalization values. Used only of norm is set to true
             reference_date (str, Format : 'YYYY-MM-DD'): Defines the reference date
                 based on which all observation dates are expressed. Along with the image
                 time series and the target tensor, this dataloader yields the sequence
@@ -80,9 +87,10 @@ class S2TSCZCrop_Dataset(tdata.Dataset):
                 while S2TSCZCrop has channels ordered as found in .SAFE format:
                     [B04, B03, B02, B08, B05, B06, B07, B8A, B11, B12]
         """
-        super(S2TSCZCrop_Dataset, self).__init__()
+        super().__init__()
         self.folder = folder
         self.norm = norm
+        self.norm_values_folder = norm_values_folder
         self.reference_date = datetime(*map(int, reference_date.split("-")))
 
         # simple fix to get same order of channels like in PASTIS dataset
@@ -160,15 +168,14 @@ class S2TSCZCrop_Dataset(tdata.Dataset):
 
         # Get normalisation values
         if norm:
-            if not os.path.isfile(os.path.join(folder, "NORM_S2_patch.json")):
-                logging.info("Normalization values for dataset not found."
-                             "Generating normalization values for dataset")
-                compute_norm_vals(self.folder)
+            if not os.path.isfile(os.path.join(norm_values_folder, "NORM_S2_patch.json")):
+                raise Exception(f"Norm parameter set to True but normalization values json file for dataset was "
+                                f"not found in specified directory {norm_values_folder} .")
 
             self.norm = {}
 
             with open(
-                    os.path.join(folder, "NORM_S2_patch.json"), "r"
+                    os.path.join(norm_values_folder, "NORM_S2_patch.json"), "r"
             ) as file:
                 normvals = json.loads(file.read())
             selected_folds = folds if folds is not None else range(1, 6)
@@ -268,9 +275,9 @@ class S2TSCZCrop_Dataset(tdata.Dataset):
         id_patch = self.id_patches[item]
         _, target = self[item]
         # currently works only for 2d arrays
-        r = DatasetCreator.unpatchify(id=id_patch, data=target.numpy(), metadata_path=os.path.join(self.folder,
-                                                                                                   "metadata.json"),
-                                      nodata=0, dtype='uint8', export=export)
+        r = unpatchify(id=id_patch, data=target.numpy(), metadata_path=os.path.join(self.folder,
+                                                                                    "metadata.json"),
+                       nodata=0, dtype='uint8', export=export)
 
         return r
 
@@ -298,7 +305,7 @@ def compute_norm_vals(folder):
 
     """
     norm_vals = {}
-    dt = S2TSCZCrop_Dataset(folder=folder, norm=False, channels_like_pastis=False)
+    dt = S2TSCZCropDataset(folder=folder, norm=False, channels_like_pastis=False)
     meta_patch_copy = dt.meta_patch.copy(deep=True)
 
     for fold in range(1, 6):
@@ -308,7 +315,6 @@ def compute_norm_vals(folder):
         means = []
         stds = []
         for i, b in enumerate(tqdm(dt, desc=f'Processing fold: {fold}')):
-
             data = b[0][0]  # T x C x H x W
             data = data.permute(1, 0, 2, 3).contiguous()  # C x T x H x W
             means.append(data.view(data.shape[0], -1).mean(dim=-1).numpy())
@@ -324,7 +330,7 @@ def compute_norm_vals(folder):
 
 
 if __name__ == '__main__':
-    d = S2TSCZCrop_Dataset(folder='/disk2/<username>/S2TSCZCrop', norm=True)
+    d = S2TSCZCropDataset(folder='/disk2/<username>/S2TSCZCrop', norm=True)
     out = d[0]  # (data, dates), target
 
     r1 = d.rasterize_target(0, export=False)
