@@ -11,7 +11,7 @@ class TemporallySharedBlock(nn.Module):
     """
 
     def __init__(self, pad_value=None):
-        super(TemporallySharedBlock, self).__init__()
+        super().__init__()
         self.out_shape = None
         self.pad_value = pad_value
 

@@ -98,7 +98,7 @@ class TAE2d(nn.Module):
                               and attention mask is just softmax(QK^T)
             positional_encoding (bool): If False, no positional encoding is used (default True).
         """
-        super(TAE2d, self).__init__()
+        super().__init__()
         self.in_channels = in_channels
         self.mlp = copy.deepcopy(mlp)
         self.return_att = return_att
@@ -630,7 +630,7 @@ class MultiHeadAttentionV1(nn.Module):
         This is version 1 of alternative implementations of additive `MultiHeadAttention`
     """
     def __init__(self, input_dim, hidden_dim, num_heads):
-        super(MultiHeadAttentionV1, self).__init__()
+        super().__init__()
         self.num_heads = num_heads
         self.linear_in = nn.Linear(input_dim, hidden_dim * num_heads, bias=False)
         self.linear_out = nn.Linear(hidden_dim * num_heads, input_dim, bias=False)
@@ -679,7 +679,7 @@ class MultiHeadAttentionV2(nn.Module):
     """
 
     def __init__(self, d_in, hidden_size, num_heads):
-        super(MultiHeadAttentionV2, self).__init__()
+        super().__init__()
 
         self.num_heads = num_heads
         self.hidden_size = hidden_size
@@ -727,7 +727,7 @@ class MultiHeadAttentionV3(nn.Module):
         This is version 3 of alternative implementations of additive `MultiHeadAttention`
     """
     def __init__(self, input_size, hidden_size, num_heads):
-        super(MultiHeadAttentionV3, self).__init__()
+        super().__init__()
         self.num_heads = num_heads
         self.hidden_size = hidden_size
         #self.head_size = hidden_size // num_heads

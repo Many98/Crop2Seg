@@ -87,7 +87,7 @@ class UTAE(nn.Module):
             add_squeeze_excit (bool): Whether to add squeeze and excitation. Note that is is added only to convolutional
                                       part of encoder
         """
-        super(UTAE, self).__init__()
+        super().__init__()
         self.n_stages = len(encoder_widths)
         self.return_maps = return_maps
         self.encoder_widths = encoder_widths
@@ -316,7 +316,7 @@ class USAE(nn.Module):
                                       part of encoder
 
         """
-        super(USAE, self).__init__()
+        super().__init__()
         self.n_stages = len(encoder_widths)
         self.return_maps = return_maps
         self.encoder_widths = encoder_widths
@@ -529,7 +529,7 @@ class UTAEClassical(nn.Module):
             add_squeeze_excit (bool): Whether to add squeeze and excitation. Note that is is added only to convolutional
                                       part of encoder
         """
-        super(UTAEClassical, self).__init__()
+        super().__init__()
         self.n_stages = len(encoder_widths)
         self.return_maps = return_maps
         self.encoder_widths = encoder_widths

@@ -8,7 +8,7 @@ class Temporal_Aggregator(nn.Module):
     Original (slightly modified) temporal aggregator as implemented in UTAE
     """
     def __init__(self, mode="mean"):
-        super(Temporal_Aggregator, self).__init__()
+        super().__init__()
         self.mode = mode
 
     def forward(self, x: Tensor, pad_mask: None or Tensor = None, attn_mask: None or Tensor = None) -> (Tensor, None):
@@ -87,7 +87,7 @@ class Temporal_Aggregator3D(nn.Module):
         Results indicate that this change does not enhance performance
     """
     def __init__(self, mode="mean"):
-        super(Temporal_Aggregator3D, self).__init__()
+        super().__init__()
         self.mode = mode
         # we need to use 3D upconvolution because number of channels (time dime) is every time different
         # for attn_mask probably therefore authors used simple upsampling

@@ -110,7 +110,7 @@ class MBConvLayer(nn.Module):
             norm
 
     ):
-        super(MBConvLayer, self).__init__()
+        super().__init__()
         layers = []
 
         for i in range(len(nkernels) - 1):
@@ -142,7 +142,7 @@ class MBConvBlock(TemporallySharedBlock):
             *args,
             **kwargs
     ):
-        super(MBConvBlock, self).__init__(pad_value=pad_value)
+        super().__init__(pad_value=pad_value)
         self.conv = MBConvLayer(
             nkernels=nkernels,
             norm=norm
@@ -171,7 +171,7 @@ class MBDownConvBlock(TemporallySharedBlock):
             *args,
             **kwargs
     ):
-        super(MBDownConvBlock, self).__init__(pad_value=pad_value)
+        super().__init__(pad_value=pad_value)
         self.down = ConvLayer(  # here we use "normal" convlayer for downsampling
             nkernels=[d_in, d_in],
             norm=norm,
@@ -207,7 +207,7 @@ class MBUpConvBlock(nn.Module):
             self, d_in, d_out, k, s, p, d_skip=None, norm="batch", *args,
             **kwargs
     ):
-        super(MBUpConvBlock, self).__init__()
+        super().__init__()
         d = d_out if d_skip is None else d_skip
 
         # 1x1 convolution

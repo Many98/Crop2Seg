@@ -12,7 +12,7 @@ class PositionalEncoder(nn.Module):
     Original implementation of positional encoder used in UTAE
     """
     def __init__(self, d_model, T=1000, repeat=None, offset=0):
-        super(PositionalEncoder, self).__init__()
+        super().__init__()
         self.d = d_model
         self.T = T
         self.repeat = repeat
@@ -44,7 +44,7 @@ class AbsolutePositionalEncoder(nn.Module):
     Alternative implementation of positional encoder using absolute encoding i.e. number of day within year
     """
     def __init__(self, d_model: int, repeat=None):
-        super(AbsolutePositionalEncoder, self).__init__()
+        super().__init__()
 
         self.d = d_model
         self.repeat = repeat
@@ -71,7 +71,7 @@ class AbsolutePositionalEncoder(nn.Module):
 
 
 @experimental
-class LearnedPositionalEncoder(object):
+class LearnedPositionalEncoder(nn.Module):
     """
     Alternative implementation of positional encoder where positional embeddings
     are learned rather than predefined.
@@ -84,7 +84,7 @@ class LearnedPositionalEncoder(object):
         d_model: dimension of embeddings
         T: maximal length of sequence to be learned
         """
-        super(LearnedPositionalEncoder).__init__()
+        super().__init__()
 
         self.d = d_model
         self.T = T

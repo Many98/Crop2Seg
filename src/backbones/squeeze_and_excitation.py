@@ -20,7 +20,7 @@ class SqueezeAndExcitation(nn.Module):
     """
 
     def __init__(self, channel, reduction_ratio=16):
-        super(SqueezeAndExcitation, self).__init__()
+        super().__init__()
 
         self.sae = nn.Sequential(
             Reduce('b c h w -> b c', 'mean'),
@@ -64,7 +64,7 @@ class SqueezeAndExcitationInTime_v1(nn.Module):
         Parameters:
 
         """
-        super(SqueezeAndExcitationInTime_v1, self).__init__()
+        super().__init__()
 
         raise NotImplementedError
 
@@ -177,7 +177,7 @@ class SqueezeAndExcitationInTime_v2(nn.Module):
         Parameters:
 
         """
-        super(SqueezeAndExcitationInTime_v2, self).__init__()
+        super().__init__()
 
         self.in_channels = in_channels
         self.mlp = copy.deepcopy(mlp)
@@ -357,7 +357,7 @@ class SqueezeAndExcitationInTime_v3(nn.Module):
         Parameters:
 
         """
-        super(SqueezeAndExcitationInTime_v3, self).__init__()
+        super().__init__()
 
         raise NotImplementedError()
 

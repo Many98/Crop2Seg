@@ -16,7 +16,7 @@ class DepthwiseSeparableConv2D(nn.Module):
     """
 
     def __init__(self, in_channels, out_channels, kernel_size=3, padding=1, padding_mode='zeros', stride=1, bias=False):
-        super(DepthwiseSeparableConv2D, self).__init__()
+        super().__init__()
         self.depthwise = nn.Conv2d(in_channels=in_channels, out_channels=in_channels, kernel_size=kernel_size,
                                    padding=padding, padding_mode=padding_mode, stride=stride,
                                    groups=in_channels, bias=bias)
@@ -44,7 +44,7 @@ class SparseConv2d(nn.Conv2d):
 
     """
     def __init__(self, *args, **kwargs):
-        super(SparseConv2d, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
         raise NotImplementedError
         #self.register_buffer('mask', self.weight.data.clone())
@@ -64,7 +64,7 @@ class SparseConv2d(nn.Conv2d):
         # TODO we will need to find out how MASK_TOKEN will look like (zeros vs random)
         # first args[0] should be mask of shape BT x H x W which is of course composed only from 0 and 1
         x *= args[0].unsqueeze(1)  # mask the input
-        out = super(SparseConv2d, self).forward(x)  # now information is leaked into masked parts
+        out = super().forward(x)  # now information is leaked into masked parts
         # TODO note that after conv there can be different H and W so args[1] needs to contain different mask
         return out * args[1].unsqueeze(1)  # again apply mask to remove leaked information
 
@@ -88,7 +88,7 @@ class ConvLayer(nn.Module):
             conv_type='2d',
             add_squeeze=False
     ):
-        super(ConvLayer, self).__init__()
+        super().__init__()
         self.conv_type = conv_type
         layers = []
 
@@ -160,7 +160,7 @@ class ConvBlock(TemporallySharedBlock):
             conv_type='2d',
             add_squeeze=False
     ):
-        super(ConvBlock, self).__init__(pad_value=pad_value)
+        super().__init__(pad_value=pad_value)
         self.conv = ConvLayer(
             nkernels=nkernels,
             norm=norm,
@@ -198,7 +198,7 @@ class DownConvBlock(TemporallySharedBlock):
             conv_type='2d',
             add_squeeze=False
     ):
-        super(DownConvBlock, self).__init__(pad_value=pad_value)
+        super().__init__(pad_value=pad_value)
         self.down = ConvLayer(
             nkernels=[d_in, d_in],
             norm=norm,
@@ -247,7 +247,7 @@ class UpConvBlock(nn.Module):
             self, d_in, d_out, k, s, p, norm="batch", d_skip=None, padding_mode="reflect",
             conv_type='2d', add_squeeze=False
     ):
-        super(UpConvBlock, self).__init__()
+        super().__init__()
         d = d_out if d_skip is None else d_skip
 
         # 1x1 convolution
