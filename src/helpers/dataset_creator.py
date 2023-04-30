@@ -31,6 +31,8 @@ sys.path.append(root)
 from src.helpers.sentinel2raster import Sentinel2Raster, tile_coordinates
 from src.helpers.sentinel import sentinel
 
+from src.S2TSCZCrop_dataset import compute_norm_vals
+
 from src.global_vars import SENTINEL_PATH_DATASET, AGRI_PATH_DATASET, DATES, CLOUDS, TILES
 
 logging.getLogger().setLevel(logging.INFO)
@@ -193,6 +195,9 @@ class DatasetCreator(object):
         if not self.for_pretraining:
             logging.info(f"GENERATING RANDOM FOLDS")
             self._generate_folds()
+
+        logging.info("GENERATING NORMALIZATION VALUES FOR DATASET")
+        compute_norm_vals(self.out_path)
 
     @staticmethod
     def load_metadata(metadata_path: str) -> pd.DataFrame:
