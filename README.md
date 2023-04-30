@@ -6,12 +6,12 @@
 
 ## What is planned
 0. ![example workflow](https://badgen.net/badge/progress/99%25/green) Review methods & models for semantic segmentation of crop types in time-series of satellite images.
-1. ![example workflow](https://badgen.net/badge/progress/65%25/purple) Propose enhancements of reviewed methods & models if possible.
+1. ![example workflow](https://badgen.net/badge/progress/90%25/cyan) Propose enhancements of reviewed methods & models if possible.
 
 2. ![example workflow](https://badgen.net/badge/progress/99%25/green) Prepare public dataset of time-series of Sentinel-2 tiles over Czech Republic, with ground truth
     based on [LPIS data](https://eagri.cz/public/web/mze/farmar/LPIS/export-lpis-rocni-shp.html).
-3. ![example workflow](https://badgen.net/badge/progress/0%25/red) Fine-tune [U-TAE model](https://github.com/VSainteuf/utae-paps) on created dataset.
-4. ![example workflow](https://badgen.net/badge/progress/70%25/purple) Explore possibilities of dealing with pixel mixing at boundary of crop fields .
+3. ![example workflow](https://badgen.net/badge/progress/30%25/orange) Fine-tune [U-TAE model](https://github.com/VSainteuf/utae-paps) on created dataset.
+4. ![example workflow](https://badgen.net/badge/progress/85%25/cyan) Explore possibilities of dealing with pixel mixing at boundary of crop fields .
 5. ![example workflow](https://badgen.net/badge/progress/35%25/orange) Propose & implement method for self-supervised pretraining of [U-TAE model](https://github.com/VSainteuf/utae-paps) on Sentinel-2 time-series.
 6. ![example workflow](https://badgen.net/badge/progress/50%25/blue) Prepare unsupervised dataset of Sentinel-2 time-series for self-supervised pretraining.
 7. ![example workflow](https://badgen.net/badge/progress/0%25/red) Pretrain & fine-tune [U-TAE model](https://github.com/VSainteuf/utae-paps).
