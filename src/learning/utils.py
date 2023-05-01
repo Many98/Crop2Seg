@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import pickle as pkl
 import time
@@ -7,9 +8,55 @@ import numpy as np
 import torch
 import torchnet as tnt
 
+# ### small boiler plate to add src to sys path
+import sys
+from pathlib import Path
+
+file = Path(__file__).resolve()
+root = str(file).split('src')[0]
+sys.path.append(root)
+# --------------------------------------
+
 
 from src.learning.metrics import confusion_matrix_analysis
 from src.learning.miou import IoU
+
+
+from src.backbones.utae import UTAE
+from src.backbones.unet3d import UNet3D
+
+
+def get_model(config):
+    if config.model == "utae":
+        model = UTAE(
+            input_dim=10,  # number of input channels
+            encoder_widths=config.encoder_widths,
+            decoder_widths=config.decoder_widths,
+            out_conv=config.out_conv,
+            str_conv_k=config.str_conv_k,
+            str_conv_s=config.str_conv_s,
+            str_conv_p=config.str_conv_p,
+            agg_mode=config.agg_mode,
+            encoder_norm=config.encoder_norm,
+            n_head=config.n_head,
+            d_model=config.d_model,
+            d_k=config.d_k,
+            encoder=False,
+            return_maps=False,
+            pad_value=config.pad_value,
+            padding_mode=config.padding_mode,
+            # ------------------------------
+            # From here starts added arguments
+            conv_type=config.conv_type,
+            use_transpose_conv=config.use_transpose_conv,
+            use_mbconv=config.use_mbconv,
+            add_squeeze_excit=config.add_squeeze
+        )
+    elif config.model == "unet3d":
+        model = UNet3D(
+            in_channel=10, n_classes=config.num_classes, pad_value=config.pad_value
+        )
+    return model
 
 
 def iterate(
@@ -48,7 +95,7 @@ def iterate(
 
         if (i + 1) % config.display_step == 0:
             miou, acc = iou_meter.get_miou_acc()
-            print(
+            logging.info(
                 "Step [{}/{}], Loss: {:.4f}, Acc : {:.2f}, mIoU {:.2f}".format(
                     i + 1, len(data_loader), loss_meter.value()[0], acc, miou
                 )
@@ -56,7 +103,7 @@ def iterate(
 
     t_end = time.time()
     total_time = t_end - t_start
-    print("Epoch time : {:.1f}s".format(total_time))
+    logging.info("Epoch time : {:.1f}s".format(total_time))
     miou, acc = iou_meter.get_miou_acc()
     metrics = {
         "{}_accuracy".format(mode): acc,
@@ -106,9 +153,17 @@ def save_results(fold, metrics, conf_mat, config):
     )
 
 
-def overall_performance(config):
+def overall_performance(config, fold=None):
     cm = np.zeros((config.num_classes, config.num_classes))
-    for fold in range(1, 6):
+    if fold is None:
+        for f in range(1, 6):
+            cm += pkl.load(
+                open(
+                    os.path.join(config.res_dir, "Fold_{}".format(f), "conf_mat.pkl"),
+                    "rb",
+                )
+            )
+    else:
         cm += pkl.load(
             open(
                 os.path.join(config.res_dir, "Fold_{}".format(fold), "conf_mat.pkl"),
@@ -122,8 +177,10 @@ def overall_performance(config):
 
     _, perf = confusion_matrix_analysis(cm)
 
-    print("Overall performance:")
-    print("Acc: {},  IoU: {}".format(perf["Accuracy"], perf["MACRO_IoU"]))
+    logging.info("Overall performance:")
+    logging.info(f"Acc: {perf['Accuracy']},  IoU (macro): {perf['MACRO_IoU']}")
+
+    perf['folds'] = f'Performance calculated on folds: {"all" if fold is None else fold}'
 
     with open(os.path.join(config.res_dir, "overall.json"), "w") as file:
         file.write(json.dumps(perf, indent=4))
