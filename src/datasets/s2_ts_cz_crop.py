@@ -200,6 +200,7 @@ class S2TSCZCropDataset(tdata.Dataset):
         self.meta_patch.index = self.meta_patch["ID_PATCH"].astype(int)
         self.meta_patch.sort_index(inplace=True)
 
+        '''
         self.date_tables = {'S2': None}
         self.date_range = np.array(range(-200, 600))
 
@@ -208,6 +209,8 @@ class S2TSCZCropDataset(tdata.Dataset):
             index=self.meta_patch.index, columns=self.date_range, dtype=int
         )
         for pid, date_seq in dates.iteritems():
+            if pid == 59424:
+                print('f')
             d = pd.DataFrame().from_dict(date_seq, orient="index")
             d = d[0].apply(
                 lambda x: (
@@ -216,12 +219,14 @@ class S2TSCZCropDataset(tdata.Dataset):
                 ).days
             )
             date_table.loc[pid, d.values] = 1
+
+            assert len(date_seq.keys()) == np.where(date_table.loc[pid].values == 1)[0].shape[0]
         date_table = date_table.fillna(0)
         self.date_tables['S2'] = {
             index: np.array(list(d.values()))
             for index, d in date_table.to_dict(orient="index").items()
         }
-
+        '''
         logging.info("Done.")
 
         # Select Fold samples
@@ -272,6 +277,18 @@ class S2TSCZCropDataset(tdata.Dataset):
     def get_dates(self, id_patch, sat):
         return self.date_range[np.where(self.date_tables[sat][id_patch] == 1)[0]]
 
+    def get_dates(self, id):
+
+        d = pd.DataFrame().from_dict(self.meta_patch.loc[id, 'dates-S2'], orient="index")
+        d = d[0].apply(
+            lambda x: (
+                    datetime(int(str(x)[:4]), int(str(x)[4:6]), int(str(x)[6:]))
+                    - self.reference_date
+            ).days
+        )
+
+        return d.values
+
     def __getitem__(self, item):
         id_patch = self.id_patches[item]
 
@@ -286,7 +303,7 @@ class S2TSCZCropDataset(tdata.Dataset):
                     )
                 ).astype(np.float32)
             }  # T x C x H x W arrays
-            data = {s: torch.from_numpy(a)[self.channels_order] for s, a in data.items()}
+            data = {s: torch.from_numpy(a)[:, self.channels_order, ...] for s, a in data.items()}
 
             if self.norm is not None:
                 data = {
@@ -319,7 +336,7 @@ class S2TSCZCropDataset(tdata.Dataset):
         # Retrieve date sequences
         if not self.cache or id_patch not in self.memory_dates.keys():
             dates = {
-                'S2': torch.from_numpy(self.get_dates(id_patch, 'S2'))
+                'S2': torch.from_numpy(self.get_dates(id_patch))
             }
             if self.cache:
                 self.memory_dates[id_patch] = dates
@@ -344,6 +361,9 @@ class S2TSCZCropDataset(tdata.Dataset):
         # we work only with S2 data
         data = data['S2']
         dates = dates['S2']
+
+        assert data.shape[0] == dates.shape[0], f'Shape in time dimension does not match for data T={data.shape[0]} and ' \
+                                                f'for dates T={dates.shape[0]}. Id of patch is {id_patch}'
 
         return (data, dates), target
 
