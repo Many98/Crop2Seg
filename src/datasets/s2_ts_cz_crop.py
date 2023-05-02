@@ -114,6 +114,7 @@ class S2TSCZCropDataset(tdata.Dataset):
             from_date=None,
             to_date=None,
             channels_like_pastis=True,
+            use_doy=False,
             *args, **kwargs
     ):
         """
@@ -153,12 +154,15 @@ class S2TSCZCropDataset(tdata.Dataset):
                     [B02, B03, B04, B05, B06, B07, B08, B8A, B11, B12]
                 while S2TSCZCrop has channels ordered as found in .SAFE format:
                     [B04, B03, B02, B08, B05, B06, B07, B8A, B11, B12]
+            use_doy: (bool) Whether to use absolute positions for time-series i.e. day of years instead
+                           of difference between date and `self.reference_date`
         """
         super().__init__()
         self.folder = folder
         self.norm = norm
         self.norm_values = norm_values
         self.reference_date = datetime(*map(int, reference_date.split("-")))
+        self.use_doy = use_doy
 
         # simple fix to get same order of channels like in PASTIS dataset
         self.channels_like_pastis = channels_like_pastis
@@ -277,8 +281,11 @@ class S2TSCZCropDataset(tdata.Dataset):
     def get_dates(self, id_patch, sat):
         return self.date_range[np.where(self.date_tables[sat][id_patch] == 1)[0]]
 
-    def get_dates(self, id):
-
+    def get_dates_relative(self, id):
+        """
+        Method returns array representing difference between date and `self.reference_date` i.e.
+        position of element within time-series is relative to  `self.reference_date`
+        """
         d = pd.DataFrame().from_dict(self.meta_patch.loc[id, 'dates-S2'], orient="index")
         d = d[0].apply(
             lambda x: (
@@ -286,6 +293,17 @@ class S2TSCZCropDataset(tdata.Dataset):
                     - self.reference_date
             ).days
         )
+
+        return d.values
+
+    def get_dates_absolute(self, id):
+        """
+        Method returns array representing day of year for a date i.e.
+        position of element within time-series is absolute to with respect to actual year.
+        Using only 365 days long years
+        """
+        d = pd.DataFrame().from_dict(self.meta_patch.loc[id, 'dates-S2'], orient="index")
+        d = pd.to_datetime(d[0].astype(str), format='%Y%m%d').dt.dayofyear
 
         return d.values
 
@@ -336,7 +354,8 @@ class S2TSCZCropDataset(tdata.Dataset):
         # Retrieve date sequences
         if not self.cache or id_patch not in self.memory_dates.keys():
             dates = {
-                'S2': torch.from_numpy(self.get_dates(id_patch))
+                'S2': torch.from_numpy(self.get_dates_absolute(id_patch) if self.use_doy else
+                                       self.get_dates_relative(id_patch))
             }
             if self.cache:
                 self.memory_dates[id_patch] = dates
@@ -426,7 +445,7 @@ def compute_norm_vals(folder):
 
 
 if __name__ == '__main__':
-    d = S2TSCZCropDataset(folder='/disk2/<username>/S2TSCZCrop', norm=True)
+    d = S2TSCZCropDataset(folder='/disk2/<username>/S2TSCZCrop', norm=True, use_doy=False)
     out = d[0]  # (data, dates), target
 
     r1 = d.rasterize_target(0, export=False)

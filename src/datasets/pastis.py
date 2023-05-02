@@ -14,18 +14,19 @@ logging.getLogger().setLevel(logging.INFO)
 
 class PASTISDataset(tdata.Dataset):
     def __init__(
-        self,
-        folder,
-        norm=True,
-        target="semantic",
-        cache=False,
-        mem16=False,
-        folds=None,
-        reference_date="2018-09-01",
-        class_mapping=None,
-        mono_date=None,
-        sats=["S2"],
-        *args, **kwargs
+            self,
+            folder,
+            norm=True,
+            target="semantic",
+            cache=False,
+            mem16=False,
+            folds=None,
+            reference_date="2018-09-01",
+            class_mapping=None,
+            mono_date=None,
+            sats=["S2"],
+            use_doy=False,
+            *args, **kwargs
     ):
         """
         Pytorch Dataset class to load samples from the PASTIS dataset, for semantic and
@@ -72,6 +73,8 @@ class PASTISDataset(tdata.Dataset):
                 in format 'YYYY-MM-DD' and the closest available date will be selected.
             sats (list): defines the satellites to use (only Sentinel-2 is available
                 in v1.0)
+            use_doy: (bool) Whether to use absolute positions for time-series i.e. day of years instead
+                           of difference between date and `self.reference_date`
         """
         super(PASTISDataset, self).__init__()
         self.folder = folder
@@ -90,12 +93,15 @@ class PASTISDataset(tdata.Dataset):
         self.target = target
         self.sats = sats
 
+        self.use_doy = use_doy
+
         # Get metadata
         logging.info("Reading patch metadata . . .")
         self.meta_patch = gpd.read_file(os.path.join(folder, "metadata.geojson"))
         self.meta_patch.index = self.meta_patch["ID_PATCH"].astype(int)
         self.meta_patch.sort_index(inplace=True)
 
+        """
         self.date_tables = {s: None for s in sats}
         #self.date_range = np.array(range(-200, 600))
         self.date_range = np.array(range(100))  # TODO here change
@@ -130,6 +136,7 @@ class PASTISDataset(tdata.Dataset):
                 index: np.array(list(d.values()))
                 for index, d in date_table.to_dict(orient="index").items()
             }
+        """
 
         logging.info("Done.")
 
@@ -147,7 +154,7 @@ class PASTISDataset(tdata.Dataset):
             self.norm = {}
             for s in self.sats:
                 with open(
-                    os.path.join(folder, "NORM_{}_patch.json".format(s)), "r"
+                        os.path.join(folder, "NORM_{}_patch.json".format(s)), "r"
                 ) as file:
                     normvals = json.loads(file.read())
                 selected_folds = folds if folds is not None else range(1, 6)
@@ -166,8 +173,38 @@ class PASTISDataset(tdata.Dataset):
         return self.len
 
     def get_dates(self, id_patch, sat):
-        #return self.date_range[np.where(self.date_tables[sat][id_patch] == 1)[0]]  # TODO here change
+        # return self.date_range[np.where(self.date_tables[sat][id_patch] == 1)[0]]  # TODO here change
         return self.date_tables[sat][id_patch][np.where(self.date_tables[sat][id_patch] != -1)[0]].astype(np.float32)
+
+    def get_dates_relative(self, id, sat):
+        """
+        Method returns array representing difference between date and `self.reference_date` i.e.
+        position of element within time-series is relative to  `self.reference_date`
+
+        Note that this work only for S2 tiles
+        """
+        d = pd.DataFrame().from_dict(self.meta_patch.loc[id, 'dates-S2'], orient="index")
+        d = d[0].apply(
+            lambda x: (
+                    datetime(int(str(x)[:4]), int(str(x)[4:6]), int(str(x)[6:]))
+                    - self.reference_date
+            ).days
+        )
+
+        return d.values
+
+    def get_dates_absolute(self, id, sat):
+        """
+        Method returns array representing day of year for a date i.e.
+        position of element within time-series is absolute to with respect to actual year.
+        Using only 365 days long years
+
+        Note that this work only for S2 tiles
+        """
+        d = pd.DataFrame().from_dict(self.meta_patch.loc[id, 'dates-S2'], orient="index")
+        d = pd.to_datetime(d[0].astype(str), format='%Y%m%d').dt.dayofyear
+
+        return d.values
 
     def __getitem__(self, item):
         id_patch = self.id_patches[item]
@@ -189,7 +226,7 @@ class PASTISDataset(tdata.Dataset):
             if self.norm is not None:
                 data = {
                     s: (d - self.norm[s][0][None, :, None, None])
-                    / self.norm[s][1][None, :, None, None]
+                       / self.norm[s][1][None, :, None, None]
                     for s, d in data.items()
                 }
 
@@ -250,7 +287,7 @@ class PASTISDataset(tdata.Dataset):
                         size[pixel_to_object_mapping == instance_id] = (h, w)
                         object_semantic_annotation[
                             pixel_to_object_mapping == instance_id
-                        ] = pixel_semantic_annotation[instance_ids == instance_id][0]
+                            ] = pixel_semantic_annotation[instance_ids == instance_id][0]
 
                 target = torch.from_numpy(
                     np.concatenate(
@@ -280,7 +317,8 @@ class PASTISDataset(tdata.Dataset):
         # Retrieve date sequences
         if not self.cache or id_patch not in self.memory_dates.keys():
             dates = {
-                s: torch.from_numpy(self.get_dates(id_patch, s)) for s in self.sats
+                s: torch.from_numpy(self.get_dates_absolute(id_patch, s) if self.use_doy else
+                                    self.get_dates_relative(id_patch, s)) for s in self.sats
             }
             if self.cache:
                 self.memory_dates[id_patch] = dates
@@ -313,8 +351,8 @@ def prepare_dates(date_dict, reference_date):
     d = pd.DataFrame().from_dict(date_dict, orient="index")
     d = d[0].apply(
         lambda x: (
-            datetime(int(str(x)[:4]), int(str(x)[4:6]), int(str(x)[6:]))
-            - reference_date
+                datetime(int(str(x)[:4]), int(str(x)[4:6]), int(str(x)[6:]))
+                - reference_date
         ).days
     )
     return d.values
@@ -341,7 +379,8 @@ def compute_norm_vals(folder, sat):
     with open(os.path.join(folder, "NORM_{}_patch.json".format(sat)), "w") as file:
         file.write(json.dumps(norm_vals, indent=4))
 
+
 if __name__ == '__main__':
-    d = PASTISDataset('/disk2/<username>/PASTIS')
+    d = PASTISDataset('/disk2/<username>/PASTIS', use_doy=True)
     print(d[0])
     print('p')
