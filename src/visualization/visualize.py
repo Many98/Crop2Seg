@@ -806,13 +806,13 @@ def plot_log_cm(cm, labels, encoded_labels):
     cell values.
     Parameters
     ----------
-    cm
-    labels
-    encoded_labels
+    cm: 2d array
+    labels: list of labels (string representation of labels)
+    encoded_labels: list of integer codes for labels
 
     Returns
     -------
-
+    returns matplotlib.pyplot.Figure object
     """
     fig, ax = plt.subplots(figsize=(11, 11))
     log_cm = np.log(cm + 1)
@@ -830,14 +830,14 @@ def plot_cm(cm, labels, encoded_labels, normalize=True, cmap='plasma'):
     Plots normalized confusion matrix over true labels.
     Parameters
     ----------
-    cm
-    labels
-    encoded_labels
-    normalize
+    cm: 2d array
+    labels: list of labels (string representation of labels)
+    encoded_labels: list of integer codes for labels
+    normalize: whether to normalize
 
     Returns
     -------
-
+    returns matplotlib.pyplot.Figure object
     """
     fig, ax = plt.subplots(figsize=(11, 11))
     if normalize:
