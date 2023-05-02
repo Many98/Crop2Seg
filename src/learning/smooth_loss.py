@@ -1,6 +1,7 @@
 from torch.nn import CrossEntropyLoss
 from torch import Tensor
 import torch.nn.functional as F
+import torch
 
 
 class SmoothCrossEntropy2D(CrossEntropyLoss):
@@ -11,15 +12,16 @@ class SmoothCrossEntropy2D(CrossEntropyLoss):
 
     def __init__(self, weight=None, size_average=None, ignore_index=- 100, reduce=None, reduction='mean',
                  label_smoothing=0.1):
-        self.super(CrossEntropyLoss, self).__init__(weight=weight, size_average=size_average, ignore_index=ignore_index,
-                                                    reduce=reduce, reduction=reduction)
+        super().__init__(weight=weight, size_average=size_average, ignore_index=ignore_index,
+                         reduce=reduce, reduction=reduction)
         self.ls = label_smoothing
 
     def forward(self, input: Tensor, target: Tensor) -> Tensor:
         # input is expected of shape B x N_CLASSES x H x W
         # target is expected of shape B x H x W ... containing labels corresponding to classes
-        assert input.dim() == 4, '`input` is expected to have 4 dimensions (B x N_CLASSES x H x W)'
-        assert target.dim() == 3, '`target` is expected to have 3 dimensions (B x H x W)'
+        assert input.dim() == 4, f'`input` is expected to have 4 dimensions (B x N_CLASSES x H x W) but is of ' \
+                                 f'shape {input.shape}'
+        assert target.dim() == 3, f'`target` is expected to have 3 dimensions (B x H x W) but is of shape {target.shape}'
 
         one_hot_target = F.one_hot(target.long(), num_classes=input.shape[1]).permute(0, 3, 1, 2)
 
@@ -41,4 +43,4 @@ class SmoothCrossEntropy2D(CrossEntropyLoss):
 
         target = torch.where(dilated.permute(1, 0, 2, 3) == 1, exp_large, eps).permute(1, 0, 2, 3)
 
-        return self.forward(input, target)
+        return super().forward(input, target)
