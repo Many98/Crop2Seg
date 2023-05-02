@@ -65,7 +65,8 @@ parser.add_argument(
     "--weight_folder",
     default="",
     type=str,
-    help="Path to folder containing the network weights and conf.json file to resume training",
+    help="Path to folder containing the network weights in model.pth.tar file and model configuration file in conf.json."
+         "If you want to resume training then this folder should also have trainlog.json file.",
 )
 parser.add_argument(
     "--res_dir",
@@ -98,22 +99,35 @@ parser.add_argument(
 parser.add_argument("--epochs", default=100, type=int, help="Number of epochs per fold")
 parser.add_argument("--batch_size", default=4, type=int, help="Batch size")
 parser.add_argument("--lr", default=0.001, type=float, help="Learning rate")
-parser.add_argument("--mono_date", default=None, type=str)
-parser.add_argument("--ref_date", default="2018-09-01", type=str)
+parser.add_argument("--mono_date", default=None, type=str, help="Whether to perform segmentation using only one"
+                                                                " element of time-series. Use integer or string in"
+                                                                " form (YYYY-MM-DD) ")
+parser.add_argument("--ref_date", default="2018-09-01", type=str, help="Reference date (YYYY-MM-DD) used in relative"
+                                                                       " positional"
+                                                                       " encoding scheme i.e. dates are encoded"
+                                                                       " as difference between actual date and reference"
+                                                                       " date. If you want to use absolute encoding"
+                                                                       "using day of years use `--use_doy` flag")
 parser.add_argument(
     "--fold",
     default=1,
     type=int,
     help="Do only one of the five fold (between 1 and 5)",
 )
-parser.add_argument("--num_classes", default=15, type=int)
-parser.add_argument("--ignore_index", default=-1, type=int)
-parser.add_argument("--pad_value", default=0, type=float)
-parser.add_argument("--padding_mode", default="reflect", type=str)
-parser.add_argument("--conv_type", default="2d", type=str)
-parser.add_argument("--use_transpose_conv", action='store_true')
-parser.add_argument("--use_mbconv", action='store_true')
-parser.add_argument("--add_squeeze", action='store_true')
+parser.add_argument("--num_classes", default=15, type=int, help="Number of classes used in segmentation task")
+parser.add_argument("--ignore_index", default=-1, type=int, help="Index of class to be ignored")
+parser.add_argument("--pad_value", default=0, type=float, help="Padding value for time-series")
+parser.add_argument("--padding_mode", default="reflect", type=str, help="Type of padding")
+parser.add_argument("--conv_type", default="2d", type=str, help="Type of convolutional layer. Must be one of '2d' or"
+                                                                " 'depthwise_separable'")
+parser.add_argument("--use_transpose_conv", action='store_true', help="Whether to use transposed 3D convolutions for"
+                                                                      " up-sampling attention masks instead of simple"
+                                                                      " bi-linear interpolation")
+parser.add_argument("--use_mbconv", action='store_true', help="Whether to use MBConv module instead of classical "
+                                                              " convolutional layers")
+parser.add_argument("--add_squeeze", action='store_true', help="Whether to add squeeze & excitation module")
+parser.add_argument("--use_doy", action='store_true', help="Whether to use absolute positional encoding (day of year)"
+                                                           " instead of relative encoding w.r.t. reference date")
 parser.add_argument(
     "--val_every",
     default=1,
@@ -162,6 +176,7 @@ def main(config):
     finetuning = config.finetune
     start_epoch = 1
     best_mIoU = 0
+    trainlog = {}
 
     # weight_folder => user wants resume training
     if not config.weight_folder or finetuning:
@@ -188,10 +203,18 @@ def main(config):
 
         if not is_test_run and not finetuning:
             logging.info("RESUMING TRAINING...")
+            try:
+                with open(os.path.join(config.weight_folder, 'trainlog.json'), 'r') as f:
+                    trainlog = json.load(f)
+            except:
+                trainlog = {}
+
             start_epoch = state["epoch"] + 1
             best_mIoU = state.get("best_mIoU", 0)
             optimizer_state_resume = state["optimizer"]
             config.update({"epochs": num_epochs})
+
+        config = argparse.Namespace(**config)
 
     fold_sequence = fold_sequence[config.fold - 1]
 
@@ -223,7 +246,8 @@ def main(config):
         mono_date=config.mono_date,
         from_date=None,
         to_date=None,
-        channels_like_pastis=True
+        channels_like_pastis=True,
+        use_doy=config.use_doy
     )
 
     collate_fn = lambda x: pad_collate(x, pad_value=config.pad_value)
@@ -317,7 +341,7 @@ def main(config):
             optimizer.load_state_dict(optimizer_state_resume)
 
     # TODO maybe try scheduler as well
-
+    # TODO try adjusting weights
     weights = torch.ones(config.num_classes, device=device).float()
     weights[config.ignore_index] = 0
     criterion = nn.CrossEntropyLoss(weight=weights)
@@ -327,8 +351,6 @@ def main(config):
 
     if not is_test_run:
         # Training loop
-        trainlog = {}
-
         logging.info(f"STARTING FROM EPOCH: {start_epoch} \n"
                      f"TRAINING PLAN: {config.epochs} EPOCHS TO BE COMPLETED")
         for epoch in range(start_epoch, config.epochs + start_epoch):
@@ -438,6 +460,8 @@ if __name__ == "__main__":
             -1], f'Number of classes {config.num_classes} does not match number of' \
                  f' output channels {config.out_conv[-1]}'
     assert config.fold in [1, 2, 3, 4, 5], f'Parameter `fold` must be one of [1, 2, 3, 4, 5] but is {config.fold}'
+    assert config.conv_type in ['2d', 'depthwise_separable'], f'Parameter `conv_type` must be one of ' \
+                                                              f' [2d, depthwise_separable] but is {config.conv_type}'
 
     pprint.pprint(config)
     main(config)
