@@ -864,7 +864,7 @@ def plot_proba_mask(proba_mask):
 
     Returns
     -------
-
+    returns matplotlib.pyplot.Figure object
     """
     fig, ax = plt.subplots()
     sns.heatmap(proba_mask, xticklabels=False, yticklabels=False, annot=False, ax=ax)
@@ -899,13 +899,25 @@ def plot_lulc(data, labels, cmap, reclass_rules=None):
 
 
 def plot_rgb(data):
+    """
+    Plots rgb image
+    Parameters
+    ----------
+    data: np.ndarray
+        3D array [C x H x W]
+        where C (channel) dimension has Red, Green, Blue channels in this order
+    Returns
+    -------
+    returns matplotlib.pyplot.Figure object
+    """
     fig, ax = plt.subplots(figsize=(6, 6))
 
     # equalize histogram
     # data = equalize_hist(data)
     # apply log correction to contrast
-    img = adjust_log(data, 0.06).transpose(1, 2, 0)
-    ax.imshow(img)
+    #img = adjust_log(data, 0.06).transpose(1, 2, 0)
+    img = data.transpose(1, 2, 0)
+    ax.imshow(img / np.quantile(img, 0.99))
     ax.axes.yaxis.set_visible(False)
     ax.axes.xaxis.set_visible(False)
     return fig
