@@ -21,7 +21,6 @@ sys.path.append(root)
 from src.learning.metrics import confusion_matrix_analysis
 from src.learning.miou import IoU
 
-
 from src.backbones.utae import UTAE
 from src.backbones.unet3d import UNet3D
 
@@ -60,7 +59,7 @@ def get_model(config):
 
 
 def iterate(
-    model, data_loader, criterion, config, optimizer=None, mode="train", device=None
+        model, data_loader, criterion, config, optimizer=None, mode="train", device=None
 ):
     loss_meter = tnt.meter.AverageValueMeter()
     iou_meter = IoU(
@@ -135,14 +134,14 @@ def prepare_output(config):
 
 def checkpoint(fold, log, config):
     with open(
-        os.path.join(config.res_dir, "Fold_{}".format(fold), "trainlog.json"), "w"
+            os.path.join(config.res_dir, "Fold_{}".format(fold), "trainlog.json"), "w"
     ) as outfile:
         json.dump(log, outfile, indent=4)
 
 
 def save_results(fold, metrics, conf_mat, config):
     with open(
-        os.path.join(config.res_dir, "Fold_{}".format(fold), "test_metrics.json"), "w"
+            os.path.join(config.res_dir, "Fold_{}".format(fold), "test_metrics.json"), "w"
     ) as outfile:
         json.dump(metrics, outfile, indent=4)
     pkl.dump(
@@ -175,7 +174,7 @@ def overall_performance(config, fold=None):
         cm = np.delete(cm, config.ignore_index, axis=0)
         cm = np.delete(cm, config.ignore_index, axis=1)
 
-    _, perf = confusion_matrix_analysis(cm)
+    per_class, perf = confusion_matrix_analysis(cm)
 
     logging.info("Overall performance:")
     logging.info(f"Acc: {perf['Accuracy']},  IoU (macro): {perf['MACRO_IoU']}")
@@ -184,3 +183,6 @@ def overall_performance(config, fold=None):
 
     with open(os.path.join(config.res_dir, "overall.json"), "w") as file:
         file.write(json.dumps(perf, indent=4))
+
+    with open(os.path.join(config.res_dir, "per_class.json"), "w") as file:
+        file.write(json.dumps(per_class, indent=4))
