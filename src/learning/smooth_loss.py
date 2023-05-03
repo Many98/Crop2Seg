@@ -11,12 +11,31 @@ class SmoothCrossEntropy2D(CrossEntropyLoss):
     """
 
     def __init__(self, weight=None, size_average=None, ignore_index=- 100, reduce=None, reduction='mean',
-                 label_smoothing=0.1, background_index=0, background_label_value=0.5,
+                 label_smoothing=0.1, background_treatment=True, background_index=0, background_label_value=0.6,
                  class_proportions=(0.3111, 0.0193, 0.0809, 0.2809, 0.1084, 0.0892, 0.0350, 0.0170, 0.0007,
                                     0.0047, 0.0015, 0.0044, 0.0394, 0.0074)):
+        """
+        Old Parameters
+            See pytorch docs for CrossEntropyLoss
+            https://pytorch.org/docs/stable/generated/torch.nn.CrossEntropyLoss.html?highlight=cross+entropy#torch.nn.CrossEntropyLoss
+        New Parameters
+        background_treatment: bool
+            Whether to treat background differently
+        background_index: int
+            Index of background class. Default is 0
+        background_label_value: float
+            Probability value used for background class when using label smoothing
+        class_proportions: tuple
+            Class proportions excluding background class. Used to calculate new label smoothing for
+            pixels containing background class.
+            Default are values used for S2TSCZCrop dataset
+        """
         super().__init__(weight=weight, size_average=size_average, ignore_index=ignore_index,
                          reduce=reduce, reduction=reduction)
         self.ls = label_smoothing
+
+        # special treatment for background class as it can contain other crop classes
+        self.background_treatment = background_treatment
         self.background_index = background_index
         self.background_label_value = background_label_value
         self.class_proportions = class_proportions
@@ -48,11 +67,13 @@ class SmoothCrossEntropy2D(CrossEntropyLoss):
 
         target_out = torch.where(dilated.permute(1, 0, 2, 3) == 1, exp_large, eps).permute(1, 0, 2, 3)
 
-        # here added special value for backround class because background can contain other crop types
-        # therefore added 
-        distrib = list(self.class_proportions * self.background_label_value)
-        distrib = [self.background_label_value] + distrib
-        background_distribution = torch.tensor(distrib)
-        target_out = torch.where(target == self.background_index, background_distribution[None, ...], target_out)
+        # special treatment for background class because it can contain other crop types
+        # therefore added tweaked proportional distribution
+        if self.background_treatment:
+            background_distrib = torch.tensor([self.background_label_value] + list(self.class_proportions))
+            background_distrib[1:] *= 1 - self.background_label_value
+
+            target_out = torch.where(target[:, None, ...] == self.background_index, background_distrib[:, None, None],
+                                     target_out)
 
         return super().forward(input, target_out)
