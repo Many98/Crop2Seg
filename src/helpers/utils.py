@@ -66,3 +66,41 @@ def WGStoUTM(vyrez):
     a = transformer.transform(vyrez[:, 0], vyrez[:, 1])
 
     return np.transpose(np.array(a))  # Longitude, Latitude  TODO and this joke as well (at least np.flip via axis=1)
+
+def get_row_col(patch_id: int, size: int = 82):
+    """
+    Auxiliary function to get row and column indices of
+    patch based on its id.
+    Parameters
+    patch_id: int
+        id of patch within tile
+    size: int
+        Size of one side of tile (in number of pixels)
+    Returns
+        (row_index, col_index)
+    """
+    return patch_id // size, patch_id % size
+
+def calc_subtile_id(patch_id: int, size_subtile: int=6, size_tile: int = 82, size_border: int=2):
+    """
+    Auxiliary function to get id of subtile based on patch_id within tile.
+    It is used to better distribute patches to train/val/test sets 
+    Parameters
+    patch_id: int
+        id of patch within tile
+    size_subtile: int
+        Size of tile (in number of subtiles) which should partition whole tile
+    size_tile: int
+        Size of one side of tile (in number of pixels)
+    size_border: int
+        Size of border (in number of patches) used to separate created subtiles.
+    Returns
+        id of subtile, if patch_id is on patch creating border it will return -1
+    """
+    num_borders = size_subtile - 1
+
+    assert (size_tile - (num_borders * size_border) % size_subtile) == 0, 'Provided sizes are not compatible'
+
+    row, col = get_row_col(patch_id) 
+
+    pass
