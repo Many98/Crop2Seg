@@ -67,6 +67,7 @@ def WGStoUTM(vyrez):
 
     return np.transpose(np.array(a))  # Longitude, Latitude  TODO and this joke as well (at least np.flip via axis=1)
 
+
 def get_row_col(patch_id: int, size: int = 82):
     """
     Auxiliary function to get row and column indices of
@@ -81,7 +82,8 @@ def get_row_col(patch_id: int, size: int = 82):
     """
     return patch_id // size, patch_id % size
 
-def calc_subtile_id(patch_id: int, size_subtile: int=6, size_tile: int = 82, size_border: int=2):
+
+def get_subtile_id(patch_id: int, size_subtile: int = 5, size_tile: int = 82, fixed_border_size: int = 3):
     """
     Auxiliary function to get id of subtile based on patch_id within tile.
     It is used to better distribute patches to train/val/test sets 
@@ -92,15 +94,30 @@ def calc_subtile_id(patch_id: int, size_subtile: int=6, size_tile: int = 82, siz
         Size of tile (in number of subtiles) which should partition whole tile
     size_tile: int
         Size of one side of tile (in number of pixels)
-    size_border: int
-        Size of border (in number of patches) used to separate created subtiles.
+    fixed_border_size: int
+        Size of border (in number of patches) on right and bottom side of tile.
     Returns
-        id of subtile, if patch_id is on patch creating border it will return -1
+        row index, col index of subtile and its id
     """
     num_borders = size_subtile - 1
 
-    assert (size_tile - (num_borders * size_border) % size_subtile) == 0, 'Provided sizes are not compatible'
+    assert (size_tile - num_borders - fixed_border_size) % size_subtile == 0, 'Provided sizes are not compatible'
 
-    row, col = get_row_col(patch_id) 
+    row, col = get_row_col(patch_id)
 
-    pass
+    step = (size_tile - num_borders - fixed_border_size) // size_subtile
+    forbidden = [i + ((i // step) - 1) for i in range(step, size_tile - fixed_border_size - step, step)]
+    forbidden += [size_tile - 1 - i for i in range(fixed_border_size)]
+
+    if row in forbidden or col in forbidden or row >= size_tile or col >= size_tile:
+        return -1
+    '''
+    0-14 -> 0
+    16-30 -> 1
+    32-46 -> 2
+    48-62 -> 3
+    64-78 -> 4
+    '''
+    row_ = (row - (row // step)) // step
+    col_ = (col - (col // step)) // step
+    return row_, col_, row_ * size_subtile + col_
