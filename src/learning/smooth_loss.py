@@ -52,7 +52,7 @@ class SmoothCrossEntropy2D(CrossEntropyLoss):
         # 4-connectivity
         weights = torch.tensor([[0., 1., 0.],
                                 [1., 1., 1.],
-                                [0., 1., 0.]]).view(1, 1, 3, 3).repeat(input.shape[1], 1, 1, 1)
+                                [0., 1., 0.]], device=input.device, requires_grad=False).view(1, 1, 3, 3).repeat(input.shape[1], 1, 1, 1)
 
         # TODO consider 8-connectivity
         # weights = torch.ones((input.shape[1], 1, 3, 3))
