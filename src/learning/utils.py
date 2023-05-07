@@ -126,10 +126,13 @@ def recursive_todevice(x, device):
         return [recursive_todevice(c, device) for c in x]
 
 
-def prepare_output(config):
+def prepare_output(config, folds=None):
     os.makedirs(config.res_dir, exist_ok=True)
-    for fold in range(1, 6):
-        os.makedirs(os.path.join(config.res_dir, "Fold_{}".format(fold)), exist_ok=True)
+    if folds is None:
+        for fold in range(1, 6):
+            os.makedirs(os.path.join(config.res_dir, f"Fold_{fold}"), exist_ok=True)
+    else:
+        os.makedirs(os.path.join(config.res_dir, f"Fold_{folds}"), exist_ok=True)
 
 
 def checkpoint(fold, log, config):
