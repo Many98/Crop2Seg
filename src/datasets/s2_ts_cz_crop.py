@@ -6,6 +6,7 @@ import logging
 from tqdm import tqdm
 
 import numpy as np
+from scipy.ndimage.measurements import label
 import pandas as pd
 import torch
 import torch.utils.data as tdata
@@ -24,8 +25,23 @@ sys.path.append(root)
 # --------------------------------------
 
 from src.helpers.sentinel2raster import export_to_tif
+from src.global_vars import TILES
+from src.helpers.utils import get_row_col
 
 logging.getLogger().setLevel(logging.INFO)
+
+# labels
+labels = ['Background 0', 'Permanent grassland 1', 'Annual fruit and vegetable 2', 'Summer cereals 3',
+          'Winter cereals 4', 'Rapeseed 5', 'Maize 6', 'Annual forage crops 7', 'Sugar beat 8', 'Flax and Hemp 9',
+          'Permanent fruit 10', 'Hopyards 11', 'Vineyards 12', 'Other crops 13', 'Not classified 14']
+
+labels_short = ['Background 0', 'Grassland 1', 'Fruit & vegetable 2', 'Summer cereals 3',
+                'Winter cereals 4', 'Rapeseed 5', 'Maize 6', 'Forage crops 7', 'Sugar beat 8', 'Flax & Hemp 9',
+                'Permanent fruit 10', 'Hopyards 11', 'Vineyards 12', 'Other crops 13', 'Not classified 14']
+
+labels_super_short = ['Background', 'Grassland', 'Fruit_vegetable', 'Summer_cereals',
+                      'Winter_cereals', 'Rapeseed', 'Maize', 'Forage crops', 'Sugar_beat', 'Flax_Hemp',
+                      'Permanent_fruit', 'Hopyards', 'Vineyards', 'Other_crops', 'Not_classified']
 
 
 @export_to_tif
@@ -108,7 +124,8 @@ class S2TSCZCropDataset(tdata.Dataset):
             cache=False,
             mem16=False,
             folds=None,
-            reference_date="2019-02-01",
+            set_type=None,
+            reference_date="2018-09-01",
             class_mapping=None,
             mono_date=None,
             from_date=None,
@@ -138,6 +155,7 @@ class S2TSCZCropDataset(tdata.Dataset):
                 They are cast back to float32 when returned by __getitem__.
             folds (list, optional): List of ints specifying which of the 5 official
                 folds to load. By default (when None is specified) all folds are loaded.
+            set_type (str): Type of set. Can be one of 'train', 'val', 'test'
             class_mapping (dict, optional): Dictionary to define a mapping between the
                 default 18 class nomenclature and another class grouping, optional.
             mono_date (int or str, optional): If provided only one date of the
@@ -163,6 +181,10 @@ class S2TSCZCropDataset(tdata.Dataset):
         self.norm_values = norm_values
         self.reference_date = datetime(*map(int, reference_date.split("-")))
         self.use_doy = use_doy
+        self.set_type = set_type
+
+        assert set_type is not None and set_type in ['train', 'test', 'val'], f"`set_type` parameter must be one of" \
+                                                                              f"['train', 'test', 'val'] but is {set_type}"
 
         # simple fix to get same order of channels like in PASTIS dataset
         self.channels_like_pastis = channels_like_pastis
@@ -200,7 +222,14 @@ class S2TSCZCropDataset(tdata.Dataset):
                                               'time-series_length': 'int8',
                                               'crs': 'int16',
                                               'Fold': 'int8'})
-        self.meta_patch = self.meta_patch[self.meta_patch['Status'] == 'OK']
+        # self.meta_patch = self.meta_patch[self.meta_patch['Status'] == 'OK']
+        self.meta_patch = self.meta_patch[(self.meta_patch['Status'] == 'OK') & (self.meta_patch['set'] == set_type)]
+
+        if self.meta_patch.empty:
+            create_train_test_split(self.folder)
+            self.meta_patch = self.meta_patch[
+                (self.meta_patch['Status'] == 'OK') & (self.meta_patch['set'] == set_type)]
+
         self.meta_patch.index = self.meta_patch["ID_PATCH"].astype(int)
         self.meta_patch.sort_index(inplace=True)
 
@@ -234,12 +263,14 @@ class S2TSCZCropDataset(tdata.Dataset):
         logging.info("Done.")
 
         # Select Fold samples
+        '''
         if folds is not None:
             self.meta_patch = pd.concat(
                 [self.meta_patch[self.meta_patch["Fold"] == f] for f in folds]
             )
+        '''
 
-        self.len = self.meta_patch.shape[0]
+        # self.len = self.meta_patch.shape[0]
         self.id_patches = self.meta_patch.index
 
         # Get normalisation values
@@ -381,8 +412,9 @@ class S2TSCZCropDataset(tdata.Dataset):
         data = data['S2']
         dates = dates['S2']
 
-        assert data.shape[0] == dates.shape[0], f'Shape in time dimension does not match for data T={data.shape[0]} and ' \
-                                                f'for dates T={dates.shape[0]}. Id of patch is {id_patch}'
+        assert data.shape[0] == dates.shape[
+            0], f'Shape in time dimension does not match for data T={data.shape[0]} and ' \
+                f'for dates T={dates.shape[0]}. Id of patch is {id_patch}'
 
         return (data, dates), target
 
@@ -397,55 +429,206 @@ class S2TSCZCropDataset(tdata.Dataset):
         return r
 
 
-def prepare_dates(date_dict, reference_date):
-    d = pd.DataFrame().from_dict(date_dict, orient="index")
-    d = d[0].apply(
-        lambda x: (
-                datetime(int(str(x)[:4]), int(str(x)[4:6]), int(str(x)[6:]))
-                - reference_date
-        ).days
-    )
-    return d.values
-
-
-def compute_norm_vals(folder):
+def calc_cover_statistics(folder: str):
     """
-    Auxiliary function to generate mean and std over dataset (per fold)
+    Auxiliary function to calculate per class statistics over `OK` patches
     Parameters
     ----------
-    folder :
+    folder: str
+        Absolute path to directory where is stored dataset containing patches
+    Returns
+    -------
 
+    """
+    m = pd.read_json(os.path.join(folder, 'metadata.json'))
+    m.index = m['ID_PATCH'].astype(int)
+    m.sort_index(inplace=True)
+    path = os.path.join(folder, 'ANNOTATIONS')
+    stats = {f'{k}_Cover': [] for k in labels_super_short[1:]}
+
+    for _, v in tqdm(m.iterrows(), total=m.shape[0], desc='Processing...'):
+        if v.Status == 'REMOVED':
+            for k in list(stats.keys()):
+                stats[k].append(np.nan)
+            continue
+
+        t = np.load(os.path.join(path, f'TARGET_{str(v["ID_PATCH"])}'))
+        for i, k in enumerate(list(stats.keys())):
+            stats[k].append(np.count_nonzero(t == i + 1))
+
+    for k in list(stats.keys()):
+        m[k] = stats[k]
+
+    m.to_json(os.path.join(folder, 'metadata_and_stats.json'), indet=4, orient='records')
+
+
+def create_train_test_split(folder: str):
+    """
+    Auxiliary function to create train/val/test split
+    in 14:3:3 ratio.
+    Constraints are:
+        - adjacent patches must be in same set i.e. there cannot be two adjacent patches in different sets
+        - similar even distribution of patches per set over tile
+        - similar distribution of crop type classes per set
+    Parameters
+    ----------
+    folder: str
+        Absolute path to directory where is stored dataset
+    Returns
+    -------
+    """
+    if not os.path.isfile(os.path.join(folder, 'metadata_and_stats.json')):
+        logging.info("CALCULATING COVER STATISTICS")
+        calc_cover_statistics(folder)
+
+    m = pd.read_json(os.path.join(folder, 'metadata_and_stats.json'))
+    m.index = m['ID_PATCH'].astype(int)
+    m.sort_index(inplace=True)
+
+    minority_l = ['Flax_Hemp_Cover', 'Hopyards_Cover', 'Sugar_beat_Cover', 'Permanent_fruit_Cover', 'Vineyards_Cover']
+
+    majority_l = ['Background_Cover', 'Grassland_Cover', 'Winter_cereals_Cover']
+
+    element = np.ones((3, 3))
+
+    final_train_ids = []
+    final_val_ids = []
+    final_test_ids = []
+
+    for e, t in enumerate(TILES):
+        # flax & hemp has lowest number of occurrences (307 parcels) and is scattered all over the republic
+        # so we cannot lost any of them and therefore we will treat it specially
+        flax = m[(m['Flax_Hemp_Cover'] > 0.0) & (m['TILE'] == t)]
+        minority = m[((m[minority_l[0]] > 0.) | (m[minority_l[1]] > 0.) | (m[minority_l[2]] > 0.) |
+                      (m[minority_l[3]] > 0.) | (m[minority_l[4]] > 0.) |
+                      ((m[majority_l[0]] < 0.2) & (m[majority_l[1]] < 0.3) & (m[majority_l[2]] < 0.3))) &
+                     (m['TILE'] == t)]
+
+        flax_ids = flax['ID_PATCH'].values
+        minority_ids = minority['ID_PATCH'].values
+
+        grid = np.zeros((82, 82), dtype=int)
+
+        rows_flax = [get_row_col(i - (i // 6724 * 6724))[0] for i in flax_ids]
+        cols_flax = [get_row_col(i - (i // 6724 * 6724))[1] for i in flax_ids]
+        rows_minority = [get_row_col(i - (i // 6724 * 6724))[0] for i in minority_ids]
+        cols_minority = [get_row_col(i - (i // 6724 * 6724))[1] for i in minority_ids]
+
+        grid[rows_minority, cols_minority] = 1
+        grid[0:-1:10] = 0
+        grid[:, 0:-1:10] = 0
+        grid[rows_flax, cols_flax] = 1
+
+        # https://stackoverflow.com/questions/46737409/finding-connected-components-in-a-pixel-array
+        labeled, ncomponents = label(grid, element)
+
+        # features on borders should be all set to train set
+        border_components = np.unique(np.concatenate([labeled[:, [0, 81]].flatten(), labeled[[0, 81]].flatten()]))
+        border_components = [i for i in border_components if i != 0]
+
+        other_components = [i for i in np.unique(labeled) if i not in border_components + [0]]
+
+        other_components = np.random.permutation(other_components)
+
+        border_components_sizes = [np.where(labeled == i)[0].shape[0] for i in border_components]
+        other_components_sizes = [np.where(labeled == i)[0].shape[0] for i in other_components]
+
+        total = np.sum(border_components_sizes + other_components_sizes)
+        sums = {'train': np.sum(border_components_sizes) / total, 'val': 0., 'test': 0.}
+        required = {'train': 0.7, 'val': 0.15, 'test': 0.15}
+        other_sorted = [i for _, i in sorted(zip(other_components_sizes, other_components), key=lambda x: x[0])]
+        other_sizes_sorted = sorted(other_components_sizes)
+
+        train_components = border_components
+        val_components = []
+        test_components = []
+
+        for o, s_o in zip(other_sorted, other_sizes_sorted):
+            w = [1 - s / r if 1 - s / r > 0. else 0. for r, s in zip(required.values(), sums.values())]
+            weights = np.array(w) / np.sum(w)
+
+            np.random.seed(42)
+            choice = np.random.choice(3, 1, replace=False, p=weights)[0]
+
+            if choice == 0:
+                train_components.append(o)
+                sums['train'] += s_o / total
+            elif choice == 1:
+                val_components.append(o)
+                sums['val'] += s_o / total
+            elif choice == 2:
+                test_components.append(o)
+                sums['test'] += s_o / total
+
+        final_grid = np.zeros((82, 82), dtype=int)
+
+        # 1 means train set
+        final_grid = np.where(np.isin(labeled, train_components), 1, final_grid)
+        # 2 means val set
+        final_grid = np.where(np.isin(labeled, val_components), 2, final_grid)
+        # 3 means test set
+        final_grid = np.where(np.isin(labeled, test_components), 3, final_grid)
+
+        train_ids = [(i * 82 + j) + e * 82 * 82 for i, j in
+                     zip(np.where(final_grid == 1)[0], np.where(final_grid == 1)[1])]
+        val_ids = [(i * 82 + j) + e * 82 * 82 for i, j in
+                   zip(np.where(final_grid == 2)[0], np.where(final_grid == 2)[1])]
+        test_ids = [(i * 82 + j) + e * 82 * 82 for i, j in
+                    zip(np.where(final_grid == 3)[0], np.where(final_grid == 3)[1])]
+
+        with open(os.path.join(folder, f'patches_distribution_{t}.npy'), 'wb') as f:
+            np.save(f, final_grid)
+
+        final_train_ids += train_ids
+        final_val_ids += val_ids
+        final_test_ids += test_ids
+
+    m2 = pd.read_json(os.path.join(folder, 'metadata.json'), dtype={'ID_PATCH': 'int32',
+                                                                    'ID_WITHIN_TILE': 'int32',
+                                                                    'Background_Cover': 'float32',
+                                                                    'time-series_length': 'int16',
+                                                                    'crs': 'int16',
+                                                                    'Fold': 'int8'})
+    m2[final_train_ids, 'set'] = 'train'
+    m2[final_val_ids, 'set'] = 'val'
+    m2[final_test_ids, 'set'] = 'test'
+
+    m2.to_json(os.path.join(folder, 'metadata.json'), indent=4, orient='records')
+
+
+def compute_norm_vals(folder: str):
+    """
+    Auxiliary function to generate mean and std over train dataset
+    Parameters
+    ----------
+    folder: str
+        Absolute path to directory where is stored dataset
     Returns
     -------
 
     """
     norm_vals = {}
-    dt = S2TSCZCropDataset(folder=folder, norm=False, channels_like_pastis=False)
-    meta_patch_copy = dt.meta_patch.copy(deep=True)
+    dt = S2TSCZCropDataset(folder=folder, norm=False, set_type='train', channels_like_pastis=False)
 
-    for fold in range(1, 6):
-        dt.meta_patch = meta_patch_copy[meta_patch_copy['Fold'] == fold]
-        dt.id_patches = dt.meta_patch.index
+    means = []
+    stds = []
+    for i, b in enumerate(tqdm(dt, desc=f'Calculating mean and standard deviation')):
+        data = b[0][0]  # T x C x H x W
+        data = data.permute(1, 0, 2, 3).contiguous()  # C x T x H x W
+        means.append(data.view(data.shape[0], -1).mean(dim=-1).numpy())
+        stds.append(data.view(data.shape[0], -1).std(dim=-1).numpy())
 
-        means = []
-        stds = []
-        for i, b in enumerate(tqdm(dt, desc=f'Processing fold: {fold}')):
-            data = b[0][0]  # T x C x H x W
-            data = data.permute(1, 0, 2, 3).contiguous()  # C x T x H x W
-            means.append(data.view(data.shape[0], -1).mean(dim=-1).numpy())
-            stds.append(data.view(data.shape[0], -1).std(dim=-1).numpy())
+    mean = np.stack(means).mean(axis=0).astype(float)
+    std = np.stack(stds).mean(axis=0).astype(float)
 
-        mean = np.stack(means).mean(axis=0).astype(float)
-        std = np.stack(stds).mean(axis=0).astype(float)
-
-        norm_vals[f"Fold_{fold}"] = dict(mean=list(mean), std=list(std))
+    norm_vals["train"] = dict(mean=list(mean), std=list(std))
 
     with open(os.path.join(folder, "NORM_S2_patch.json"), "w") as file:
         file.write(json.dumps(norm_vals, indent=4))
 
 
 if __name__ == '__main__':
-    d = S2TSCZCropDataset(folder='/disk2/<username>/S2TSCZCrop', norm=True, use_doy=False)
+    d = S2TSCZCropDataset(folder='/disk2/<username>/S2TSCZCrop', set_type='test', norm=True, use_doy=False)
     out = d[0]  # (data, dates), target
 
     r1 = d.rasterize_target(0, export=False)
