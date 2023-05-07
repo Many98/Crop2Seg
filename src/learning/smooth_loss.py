@@ -70,7 +70,8 @@ class SmoothCrossEntropy2D(CrossEntropyLoss):
         # special treatment for background class because it can contain other crop types
         # therefore added tweaked proportional distribution
         if self.background_treatment:
-            background_distrib = torch.tensor([self.background_label_value] + list(self.class_proportions))
+            background_distrib = torch.tensor([self.background_label_value] + list(self.class_proportions),
+                                              device=input.device, requires_grad=False)
             background_distrib[1:] *= 1 - self.background_label_value
 
             target_out = torch.where(target[:, None, ...] == self.background_index, background_distrib[:, None, None],
