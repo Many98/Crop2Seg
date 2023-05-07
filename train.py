@@ -96,7 +96,7 @@ parser.add_argument(
     help="If specified, the whole dataset is kept in RAM",
 )
 # Training parameters
-parser.add_argument("--epochs", default=100, type=int, help="Number of epochs per fold")
+parser.add_argument("--epochs", default=25, type=int, help="Number of epochs")
 parser.add_argument("--batch_size", default=4, type=int, help="Batch size")
 parser.add_argument("--lr", default=0.001, type=float, help="Learning rate")
 parser.add_argument("--mono_date", default=None, type=str, help="Whether to perform segmentation using only one"
@@ -112,7 +112,9 @@ parser.add_argument(
     "--fold",
     default=1,
     type=int,
-    help="Do only one of the five fold (between 1 and 5)",
+    help="Specify fold. (between 1 and 5) Note that this argument is used only as legacy argument \n"
+         "and is used only for accessing correct normalization values e.g. if using PASTIS trained"
+         "network for fine-tuning",
 )
 parser.add_argument("--num_classes", default=15, type=int, help="Number of classes used in segmentation task")
 parser.add_argument("--ignore_index", default=-1, type=int, help="Index of class to be ignored")
@@ -158,16 +160,17 @@ def main(config):
         To perform only inference use `--test` flag
         To perform fine-tuning use `--finetune` flag
     """
-    # as S2TSCZCrop dataset is bigger than PASTIS we will use different train/val/test splits
-    # 1st four random folds will be used for training and 5th fold will be splitted to val and test
-    # user can specify which fold sequence use by `fold` parameter default is 1
-    fold_sequence = (
-        ((1, 2, 3, 4), (5,)),
-        ((1, 2, 3, 5), (4,)),
-        ((1, 2, 5, 4), (3,)),
-        ((1, 5, 3, 4), (2,)),
-        ((5, 2, 3, 4), (1,)),
-    )
+    # In S2TSCZCrop dataset  we will use classical train/val/test splits
+    # `fold` parameter is not used
+
+    # TODO this fold sequence will be used only if PASTIS is used e.g. for finetuning
+    fold_sequence = [
+        [[1, 2, 3], [4], [5]],
+        [[2, 3, 4], [5], [1]],
+        [[3, 4, 5], [1], [2]],
+        [[4, 5, 1], [2], [3]],
+        [[5, 1, 2], [3], [4]],
+    ]
 
     np.random.seed(config.rdm_seed)
     torch.manual_seed(config.rdm_seed)
@@ -180,7 +183,7 @@ def main(config):
 
     # weight_folder => user wants resume training
     if not config.weight_folder or finetuning:
-        prepare_output(config)
+        prepare_output(config, folds=1)
 
     if config.weight_folder:
         logging.info(f"LOADING WEIGHTS FROM {os.path.join(config.weight_folder, 'model.pth.tar')}")
@@ -218,6 +221,8 @@ def main(config):
 
     fold_sequence = fold_sequence[config.fold - 1]
 
+    config.fold = 1  # we do not need fold parameter therefore here hardcoded to 1. but still using for consistency
+
     if not os.path.isfile(os.path.join(config.norm_values_folder, "NORM_S2_patch.json")):
         raise Exception(f"Norm parameter set to True but normalization values json file for dataset was "
                         f"not found in specified directory {config.norm_values_folder} .")
@@ -227,8 +232,14 @@ def main(config):
     ) as file:
         normvals = json.loads(file.read())
 
-    means = [normvals[f"Fold_{f}"]["mean"] for f in fold_sequence[0]]
-    stds = [normvals[f"Fold_{f}"]["std"] for f in fold_sequence[0]]
+    if 'Fold' in list(normvals.keys())[0]:
+        means = [normvals[f"Fold_{f}"]["mean"] for f in fold_sequence[0]]
+        stds = [normvals[f"Fold_{f}"]["std"] for f in fold_sequence[0]]
+    elif 'train' in list(normvals.keys())[0]:
+        means = [normvals[f"train"]["mean"]]
+        stds = [normvals[f"train"]["std"]]
+    else:
+        raise Exception('Unknown structure of normalization values json file')
 
     # TODO here is fix for channels order to be like in PASTIS dataset
     channels_order = [2, 1, 0, 4, 5, 6, 3, 7, 8, 9]
@@ -253,7 +264,10 @@ def main(config):
     collate_fn = lambda x: pad_collate(x, pad_value=config.pad_value)
 
     if not is_test_run:
-        dt_train = S2TSCZCropDataset(**dt_args, folds=fold_sequence[0], cache=config.cache)
+        dt_train = S2TSCZCropDataset(**dt_args,
+                                     # folds=fold_sequence[0],
+                                     set_type='train',
+                                     cache=config.cache)
 
         train_loader = data.DataLoader(
             dt_train,
@@ -261,14 +275,16 @@ def main(config):
             shuffle=True,
             drop_last=True,
             collate_fn=collate_fn,
-            #num_workers=2,
-            #persistent_workers=True
+            # num_workers=2,
+            # persistent_workers=True
         )
 
-    dt_ = S2TSCZCropDataset(**dt_args, folds=fold_sequence[1], cache=config.cache)
+    # dt_ = S2TSCZCropDataset(**dt_args, folds=fold_sequence[1], cache=config.cache)
 
-    # TODO test it
-    dt_val, dt_test = data.random_split(dt_, [0.5, 0.5])
+    dt_val = S2TSCZCropDataset(**dt_args, set_type='val', cache=config.cache)
+    dt_test = S2TSCZCropDataset(**dt_args, set_type='test', cache=config.cache)
+
+    # dt_val, dt_test = data.random_split(dt_, [0.5, 0.5])
 
     val_loader = data.DataLoader(
         dt_val,
@@ -276,8 +292,8 @@ def main(config):
         shuffle=True,
         drop_last=True,
         collate_fn=collate_fn,
-        #num_workers=1,
-        #persistent_workers=True
+        # num_workers=1,
+        # persistent_workers=True
     )
     test_loader = data.DataLoader(
         dt_test,
@@ -285,7 +301,7 @@ def main(config):
         # shuffle=True,
         drop_last=True,
         collate_fn=collate_fn,
-        #num_workers=0,
+        # num_workers=0,
         # persistent_workers=True
     )
 
@@ -347,7 +363,7 @@ def main(config):
     criterion = nn.CrossEntropyLoss(weight=weights)
 
     # TODO test `SmoothCrossEntropy2D`
-    # criterion = SmoothCrossEntropy2D(weight=weights)
+    # criterion = SmoothCrossEntropy2D(weight=weights, background_treatment=False)
 
     if not is_test_run:
         # Training loop
@@ -392,7 +408,6 @@ def main(config):
                     best_mIoU = val_metrics["val_IoU"]
                     torch.save(
                         {
-                            "fold": config.fold,
                             "best_mIoU": best_mIoU,
                             "epoch": epoch,
                             "state_dict": model.state_dict(),
@@ -451,6 +466,10 @@ if __name__ == "__main__":
     assert os.path.isdir(config.dataset_folder), f'Path {config.dataset_folder} for dataset is not valid'
     assert os.path.isdir(config.norm_values_folder), f'Path {config.norm_values_folder} where to look for normalization' \
                                                      f'values is not valid'
+    assert os.path.isfile(os.path.join(config.norm_values_folder, 'NORM_S2_patch.json')), \
+        f'There is no NORM_S2_patch.json file with normalization values in {config.norm_values_folder}. \n' \
+        f'You should call appropriate `compute_norm_vals` function (from pastis.py or s2_ts_cz_crop.py)' \
+        f'to generate normalization values for corresponding dataset'
     if config.weight_folder:
         assert os.path.isdir(config.weight_folder), f'Path {config.weight_folder} where should be stored weights of ' \
                                                     f'network and conf.json file is not valid'
@@ -466,4 +485,3 @@ if __name__ == "__main__":
     pprint.pprint(config)
     main(config)
 
-    # TODO make sure ignore index works as expected (also in CM calculation)
