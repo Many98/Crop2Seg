@@ -117,7 +117,7 @@ class DatasetCreator(object):
             self.metadata = pd.DataFrame(
                 {'ID_PATCH': [], 'ID_WITHIN_TILE': [], 'Background_Cover': [], 'Nodata_Cover': [],
                  'Snow_Cloud_Cover': [], 'TILE': [], 'dates-S2': [], 'time-series_length': [],
-                 'crs': [], 'affine': [], 'Fold': [], 'Status': []})
+                 'crs': [], 'affine': [], 'Fold': [], 'Status': [], 'set': []})
 
     def __call__(self, *args, **kwargs):
         """
@@ -192,12 +192,16 @@ class DatasetCreator(object):
                          f"------------------------------------------------------\n\n")
             gc.collect()
 
+        # TODO train/val/test splits are dependent on crop type classes and therefore
+        #  one must do splits himself
+        '''
         if not self.for_pretraining:
-            logging.info(f"GENERATING RANDOM FOLDS")
-            self._generate_folds()
+            logging.info(f"GENERATING RANDOM TRAIN/VAL/TEST SPLITS IN 14:3:3 PROPORTION")
+            self._generate_train_test_split()
 
         logging.info("GENERATING NORMALIZATION VALUES FOR DATASET")
         compute_norm_vals(self.out_path)
+        '''
 
     @staticmethod
     def load_metadata(metadata_path: str) -> pd.DataFrame:
@@ -531,7 +535,8 @@ class DatasetCreator(object):
              'crs': [int(crs) for _ in range(patches_bool_map.shape[0])],
              'affine': [a if patches_bool_map[ii] else None for ii, a in enumerate(affine)],
              'Fold': [-1 for _ in range(patches_bool_map.shape[0])],
-             'Status': ['OK' if i else 'REMOVED' for i in patches_bool_map]})
+             'Status': ['OK' if i else 'REMOVED' for i in patches_bool_map],
+             'set': [None for _ in patches_bool_map]})
 
         self.metadata = self.metadata.append(update, ignore_index=True)
         self.metadata = self.metadata.astype({'ID_PATCH': 'int32',
@@ -542,11 +547,12 @@ class DatasetCreator(object):
                                               'Fold': 'int8'})
         self.metadata.to_json(os.path.join(self.out_path, 'metadata.json'), orient="records", indent=4)
 
-    def _generate_folds(self) -> None:
+    def _generate_train_test_split(self) -> None:
         """
-        Auxiliary method to distribute patches (randomly) to 5 folds.
+        Auxiliary method to distribute patches (randomly) to train/val/test subsets.
         It operates over `self.metadata` DataFrame
         """
+        '''
         ok_indices = np.array(self.metadata[self.metadata['Status'] == 'OK'].index)
         np.random.shuffle(ok_indices)
         split_5 = np.array_split(ok_indices, 5)
@@ -555,6 +561,9 @@ class DatasetCreator(object):
             self.metadata.loc[split_5[i], 'Fold'] = i + 1
 
         self.metadata.to_json(os.path.join(self.out_path, 'metadata.json'), orient="records", indent=4)
+        '''
+        pass  # random train test val splits are undesired because one optimal distribution is constrained
+        # by proximity of patches, distribution of classes within patches etc.
 
     def _create_segmentation(self, shape: Tuple, affine: rasterio.Affine,
                              bbox: rasterio.coords.BoundingBox) -> np.ndarray:
