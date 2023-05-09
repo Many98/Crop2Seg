@@ -166,6 +166,12 @@ class Sentinel2Raster(object):
             return self._data[:]
         return self._data[channel - 1]
 
+    def index(self, lon, lat):
+        """
+        Return indexes based on longitude and latitude
+        """
+        return self.__property_reader.index(lon, lat)
+
     @export_to_tif
     def to_tif(self, export=True):
         """
