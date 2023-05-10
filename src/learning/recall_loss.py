@@ -29,7 +29,7 @@ class RecallCrossEntropy(torch.nn.Module):
         gt_idx, gt_count = torch.unique(target, return_counts=True)
 
         # map ignored label to an exisiting one
-        gt_count[gt_idx == self.ignore_index] = gt_count[1]
+        gt_count[gt_idx == self.ignore_index] = gt_count[1].item()  # this part is weird
         gt_idx[gt_idx == self.ignore_index] = 1
         gt_counter[gt_idx] = gt_count.float()
 
@@ -39,7 +39,7 @@ class RecallCrossEntropy(torch.nn.Module):
         fn_idx, fn_count = torch.unique(fn, return_counts=True)
 
         # map ignored label to an exisiting one
-        fn_count[fn_idx == self.ignore_index] = fn_count[1]
+        fn_count[fn_idx == self.ignore_index] = fn_count[1].item()
         fn_idx[fn_idx == self.ignore_index] = 1
         fn_counter[fn_idx] = fn_count.float()
 
