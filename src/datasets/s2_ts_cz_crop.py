@@ -43,6 +43,36 @@ labels_super_short = ['Background', 'Grassland', 'Fruit_vegetable', 'Summer_cere
                       'Winter_cereals', 'Rapeseed', 'Maize', 'Forage crops', 'Sugar_beat', 'Flax_Hemp',
                       'Permanent_fruit', 'Hopyards', 'Vineyards', 'Other_crops', 'Not_classified']
 
+labels_super_short_2 = ['Background', 'Grassland', 'Fruit/vegetable', 'Summer cereals',
+                        'Winter cereals', 'Rapeseed', 'Maize', 'Forage crops', 'Sugar beat', 'Flax/Hemp',
+                        'Permanent fruit', 'Hopyards', 'Vineyards', 'Other crops', 'Not classified']
+
+
+def crop_cmap():
+    """
+    Auxiliary function to return dictionary with color map used for visualization
+    of classes in S2TSCZCrop dataset
+    """
+    def get_rgb(h):
+        return list(np.array(list(int(h.lstrip('#')[i:i + 2], 16) for i in (0, 2, 4))) / 255) + [1]
+
+    return {0: [0, 0, 0, 1],  # Background
+            1: get_rgb('#a0db8e'),  # Permanent grassland
+            2: get_rgb('#cc5500'),  # Annual fruit and vegetable
+            3: get_rgb('#e9de89'),  # Summer cereals
+            4: get_rgb('#f4ecb1'),  # Winter cereals
+            5: get_rgb('#dec928'),  # Rapeseed
+            6: get_rgb('#f0a274'),  # Maize
+            7: get_rgb('#556b2f'),  # Annual forage crops
+            8: get_rgb('#94861b'),  # Sugar beat
+            9: get_rgb('#767ee1'),  # Flax and Hemp
+            10: get_rgb('#7d0015'),  # Permanent fruit
+            11: get_rgb('#9299a9'),  # Hopyards
+            12: get_rgb('#dea7b0'),  # Vineyards
+            13: get_rgb('#ff0093'),  # Other crops
+            14: get_rgb('#f0f8ff'),  # Not classified (removed from training and evaluation)
+            }
+
 
 @export_to_tif
 def unpatchify(id: int, data: np.array, metadata_path: str, nodata: int = 0, dtype: str = 'uint8',
