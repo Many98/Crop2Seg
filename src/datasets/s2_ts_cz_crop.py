@@ -459,13 +459,17 @@ class S2TSCZCropDataset(tdata.Dataset):
         return r
 
 
-def calc_cover_statistics(folder: str):
+def calc_cover_statistics(folder: str, labels: list = labels_super_short):
     """
     Auxiliary function to calculate per class statistics over `OK` patches
     Parameters
     ----------
     folder: str
         Absolute path to directory where is stored dataset containing patches
+    labels: list
+        List containing names of classes. Note that 0th class is expected to be background.
+        Also note that order and length of list is used to determine class codes and number of classes therefore
+        order class names based on their class codes used in ground-truth
     Returns
     -------
 
@@ -474,7 +478,7 @@ def calc_cover_statistics(folder: str):
     m.index = m['ID_PATCH'].astype(int)
     m.sort_index(inplace=True)
     path = os.path.join(folder, 'ANNOTATIONS')
-    stats = {f'{k}_Cover': [] for k in labels_super_short[1:]}
+    stats = {f'{k}_Cover': [] for k in labels[1:]}
 
     for _, v in tqdm(m.iterrows(), total=m.shape[0], desc='Processing...'):
         if v.Status == 'REMOVED':
@@ -495,7 +499,8 @@ def calc_cover_statistics(folder: str):
 def create_train_test_split(folder: str):
     """
     Auxiliary function to create train/val/test split
-    in 14:3:3 ratio.
+    in 14:3:3 ratio i.e. 70:15:15 %.
+    Note that this function is tailored for crop types used in S2TSCZCrop dataset i.e. implementation is not general
     Constraints are:
         - adjacent patches must be in same set i.e. there cannot be two adjacent patches in different sets
         - similar even distribution of patches per set over tile
@@ -509,7 +514,7 @@ def create_train_test_split(folder: str):
     """
     if not os.path.isfile(os.path.join(folder, 'metadata_and_stats.json')):
         logging.info("CALCULATING COVER STATISTICS")
-        calc_cover_statistics(folder)
+        calc_cover_statistics(folder, labels_super_short)
 
     m = pd.read_json(os.path.join(folder, 'metadata_and_stats.json'))
     m.index = m['ID_PATCH'].astype(int)
@@ -622,8 +627,12 @@ def create_train_test_split(folder: str):
     m2[final_train_ids, 'set'] = 'train'
     m2[final_val_ids, 'set'] = 'val'
     m2[final_test_ids, 'set'] = 'test'
+    m[final_train_ids, 'set'] = 'train'
+    m[final_val_ids, 'set'] = 'val'
+    m[final_test_ids, 'set'] = 'test'
 
     m2.to_json(os.path.join(folder, 'metadata.json'), indent=4, orient='records')
+    m.to_json(os.path.join(folder, 'metadata_and_stats.json'), indent=4, orient='records')
 
 
 def compute_norm_vals(folder: str):
