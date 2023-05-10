@@ -202,6 +202,42 @@ class DatasetCreator(object):
         logging.info("GENERATING NORMALIZATION VALUES FOR DATASET")
         compute_norm_vals(self.out_path)
         '''
+    def crop(self, tile_name: str, top: int, left: int,  size: int = 1024) -> \
+            Tuple[np.ndarray, np.ndarray, rasterio.Affine, int, list]:
+        """
+        Method to crop `bbox` from tile named `tilename` and create time-series
+        Parameters
+        ----------
+        tile_name : str
+             Name of tile
+        top: int
+            Top index
+        left: int
+            Left index
+        size: int
+            Size (in num. of pixels) to be used when cropping tile
+        """
+        file_names = self._get_filenames(tile_name)  # filenames sorted according to date
+
+        raster = Sentinel2Raster(os.path.join(self.tiles_path, file_names[0]))
+
+        #py, px = raster.index(left, top)  # lon is x coordinate, lat is y coordinate
+
+        w = rasterio.windows.Window(left, top, size, size)
+        new_affine = rasterio.windows.transform(w, raster.transform)
+        bbox = rasterio.coords.BoundingBox(new_affine.c, new_affine.f + new_affine.e * size,
+                                           new_affine.c + new_affine.a * size, new_affine.f)
+
+        logging.info(f"CONSTRUCTING TIME-SERIES FOR TILE: {tile_name}")
+        time_series, _, _, crs, _, dates = self._load_s2(tile_name)  # T x (C+1) x H x W
+
+        logging.info(f"LENGTH OF TIME-SERIES IS: {len(file_names)}")
+
+        cropped_time_series = self._preprocess(time_series[:, :, top:top+size, left:left+size])  # T x (C+1) x H x W
+        segmentation_mask = self._create_segmentation(cropped_time_series.shape[-2:], new_affine, bbox)  # H x W
+        del time_series
+
+        return cropped_time_series[:, :-1, ...], segmentation_mask, new_affine, crs, dates
 
     @staticmethod
     def load_metadata(metadata_path: str) -> pd.DataFrame:
