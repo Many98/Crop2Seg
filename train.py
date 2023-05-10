@@ -9,10 +9,13 @@ import torch
 import torch.nn as nn
 import torch.utils.data as data
 
+from segmentation_models_pytorch.losses import FocalLoss, TverskyLoss, LovaszLoss
+
 from src.utils import pad_collate, get_ntrainparams
 from src.datasets.s2_ts_cz_crop import S2TSCZCropDataset
 from src.learning.weight_init import weight_init
 from src.learning.smooth_loss import SmoothCrossEntropy2D
+from src.learning.recall_loss import RecallCrossEntropy
 from src.learning.utils import iterate, overall_performance, save_results, prepare_output, checkpoint, get_model
 
 parser = argparse.ArgumentParser()
@@ -357,12 +360,55 @@ def main(config):
             optimizer.load_state_dict(optimizer_state_resume)
 
     # TODO maybe try scheduler as well
-    # TODO try adjusting weights
+
+    # note that we ensure ignoring some classes by setting weight to 0
     weights = torch.ones(config.num_classes, device=device).float()
     weights[config.ignore_index] = 0
-    criterion = nn.CrossEntropyLoss(weight=weights)
 
-    # TODO test `SmoothCrossEntropy2D`
+    # ---- ATTEMPTS TO RESOLVE CLASS IMBALANCE PROBLEM ----------------
+    #
+    # ---- By adjusting weights ----------
+
+    # first attempt
+    # weights[:-1] = 1 / torch.tensor([0.3, 0.08, 0.015, 0.08, 0.22, 0.1, 0.09, 0.02, 0.05, 0.001, 0.015, 0.008,
+    #                                 0.015, 0.05], device=device)
+
+    # second attempt (v2)
+    weights[:-1] = 1 / torch.tensor([0.5, 0.5, 0.5, 0.5, 0.5, 0.4, 0.1, 0.1, 0.1, 0.04, 0.1, 0.1,
+                                     0.1, 0.1], device=device)
+
+    #criterion = nn.CrossEntropyLoss(weight=weights)
+
+    # ---- By using specific loss functions ----------
+
+    # Focal loss ; ref: https://arxiv.org/pdf/1708.02002v2.pdf  (modified CE loss)
+    criterion = FocalLoss(mode='multiclass',
+                          gamma=2.0,
+                          ignore_index=[i for i in range(15)][config.ignore_index])
+
+    '''
+    # Recall Loss; ref: https://arxiv.org/pdf/2106.14917.pdf (similarly like FocalLoss it tries to dynamically weight
+    #                                                           CrossEntropy)
+    criterion = RecallCrossEntropy(n_classes=config.num_classes,
+                                   ignore_index=[i for i in range(15)][config.ignore_index])
+    
+    # Lovasz loss; ref: https://arxiv.org/pdf/1705.08790.pdf  (it optimizes IoU)
+    criterion = LovaszLoss(mode='multiclass', per_image=False,
+                           ignore_index=[i for i in range(15)][config.ignore_index])
+
+    # Tversky Loss ; ref: https://arxiv.org/pdf/1706.05721.pdf
+    #   (modification of dice-coefficient or jaccard coefficient by weighting FP and FN)
+    criterion = TverskyLoss(mode='multiclass', classes=None,
+                            smooth=0.0, ignore_index=[i for i in range(15)][config.ignore_index],
+                            alpha=0.5,  # alpha weights FP
+                            beta=0.5,  # beta weights FN
+                            gamma=1.0
+                            )
+    '''
+    # -----------------------------------------------------------------------
+
+    # SmoothCrossEntropy2D - our modification of classical 2D CE with specific labels smoothing on
+    #  borders of crop fields which should help with pixel mixing problem (on boundaries of semantic classes)
     # criterion = SmoothCrossEntropy2D(weight=weights, background_treatment=False)
 
     if not is_test_run:
@@ -462,6 +508,7 @@ if __name__ == "__main__":
             v = v.replace("]", "")
             config.__setattr__(k, list(map(int, v.split(","))))
 
+
     assert not config.finetune or not config.test, f'Use only one flag. Either `--finetune` or `--test`'
     assert os.path.isdir(config.dataset_folder), f'Path {config.dataset_folder} for dataset is not valid'
     assert os.path.isdir(config.norm_values_folder), f'Path {config.norm_values_folder} where to look for normalization' \
@@ -484,4 +531,3 @@ if __name__ == "__main__":
 
     pprint.pprint(config)
     main(config)
-
