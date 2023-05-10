@@ -1,13 +1,13 @@
 Package                     Version
 --------------------------- -------------------
 
-Fiona                       1.8.17
+Fiona                       1.9.3
 filelock                    3.0.12
 GDAL                        3.1.2
 osgeo                       0.0.1
 Shapely                     1.7.1
 geojson                     2.5.0
-geopandas                   0.8.1
+geopandas                   0.13.0
 rasterio                    1.1.6
 rioxarray                   0.14.1
 ray                         2.0.0.dev0
@@ -28,6 +28,8 @@ torchnet                    0.0.4
 torch_scatter               2.1.1
 torchmetrics                0.9.2
 torchvision                 0.13.0
+pytorch-toolbelt            0.4.2
+segmentation-models-pytorch 0.2.1
 tqdm                        4.64.0
 opencv-python               4.7.0.72
 
