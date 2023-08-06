@@ -21,6 +21,7 @@ class PASTISDataset(tdata.Dataset):
             cache=False,
             mem16=False,
             folds=None,
+            norm_folds=None,  # TODO added 24.7.23
             reference_date="2018-09-01",
             class_mapping=None,
             mono_date=None,
@@ -101,43 +102,6 @@ class PASTISDataset(tdata.Dataset):
         self.meta_patch.index = self.meta_patch["ID_PATCH"].astype(int)
         self.meta_patch.sort_index(inplace=True)
 
-        """
-        self.date_tables = {s: None for s in sats}
-        #self.date_range = np.array(range(-200, 600))
-        self.date_range = np.array(range(100))  # TODO here change
-        for s in sats:
-            dates = self.meta_patch["dates-{}".format(s)]
-            date_table = pd.DataFrame(
-                index=self.meta_patch.index,
-                columns=self.date_range,
-                dtype=int
-            )
-            for pid, date_seq in dates.iteritems():
-                d = pd.DataFrame().from_dict(date_seq, orient="index")
-
-                # this extracts relative position according to reference day
-                '''
-                d1 = d[0].apply(
-                    lambda x: (
-                        datetime(int(str(x)[:4]), int(str(x)[4:6]), int(str(x)[6:]))
-                        - self.reference_date
-                    ).days
-                )
-                '''
-
-                # TODO we could instead provide model with absolute information i.e. day of year
-                d2 = pd.to_datetime(d[0].astype(str), format='%Y%m%d').dt.dayofyear
-
-                #date_table.loc[pid, d2.values] = 1  # TODO change here
-                date_table.loc[pid, list(range(d2.values.shape[0]))] = d2.values
-            #date_table = date_table.fillna(0)  # TODO here change
-            date_table = date_table.fillna(-1)
-            self.date_tables[s] = {
-                index: np.array(list(d.values()))
-                for index, d in date_table.to_dict(orient="index").items()
-            }
-        """
-
         logging.info("Done.")
 
         # Select Fold samples
@@ -157,7 +121,7 @@ class PASTISDataset(tdata.Dataset):
                         os.path.join(folder, "NORM_{}_patch.json".format(s)), "r"
                 ) as file:
                     normvals = json.loads(file.read())
-                selected_folds = folds if folds is not None else range(1, 6)
+                selected_folds = norm_folds if norm_folds is not None else range(1, 6)
                 means = [normvals["Fold_{}".format(f)]["mean"] for f in selected_folds]
                 stds = [normvals["Fold_{}".format(f)]["std"] for f in selected_folds]
                 self.norm[s] = np.stack(means).mean(axis=0), np.stack(stds).mean(axis=0)
@@ -171,10 +135,6 @@ class PASTISDataset(tdata.Dataset):
 
     def __len__(self):
         return self.len
-
-    def get_dates(self, id_patch, sat):
-        # return self.date_range[np.where(self.date_tables[sat][id_patch] == 1)[0]]  # TODO here change
-        return self.date_tables[sat][id_patch][np.where(self.date_tables[sat][id_patch] != -1)[0]].astype(np.float32)
 
     def get_dates_relative(self, id, sat):
         """
