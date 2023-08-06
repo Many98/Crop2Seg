@@ -1,9 +1,12 @@
 import collections.abc
 import re
+import random
 
 import torch
 from torch.nn import functional as F
 from torch.utils import data
+
+from torchvision.transforms.functional import hflip, vflip, rotate
 
 import warnings
 
@@ -67,4 +70,30 @@ def pad_collate(batch, pad_value=0):
 
 def get_ntrainparams(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+class Transform(torch.nn.Module):
+    def __init__(self, add_noise: bool = False):
+        super().__init__()
+
+        self.add_noise = add_noise
+
+    def __call__(self, img, mask):
+        deg = random.choice([-180, -150, -120, -90, -75, -45, -25, -10, 0, 0, 0, 0, 10, 25, 45, 75, 90, 120, 150, 180])
+        flip = random.choice([0, 1, 2])
+
+        if self.add_noise and random.random() > 0.5:
+            img = img + 0.01*torch.randn(img.shape)
+
+        if flip == 1:
+            img = hflip(img)
+            mask = hflip(mask)
+        elif flip == 2:
+            img = vflip(img)
+            mask = vflip(mask)
+
+        img = rotate(img, deg)
+        mask = rotate(mask[None, :], deg)[0]
+
+        return img, mask
 
