@@ -3,6 +3,17 @@ from torch import Tensor
 import torch.nn.functional as F
 import torch
 
+# ### small boiler plate to add src to sys path
+import sys
+from pathlib import Path
+
+file = Path(__file__).resolve()
+root = str(file).split('src')[0]
+sys.path.append(root)
+# --------------------------------------
+
+from src.learning.utils import get_dilated
+
 
 class SmoothCrossEntropy2D(CrossEntropyLoss):
     """
@@ -47,18 +58,7 @@ class SmoothCrossEntropy2D(CrossEntropyLoss):
                                  f'shape {input.shape}'
         assert target.dim() == 3, f'`target` is expected to have 3 dimensions (B x H x W) but is of shape {target.shape}'
 
-        one_hot_target = F.one_hot(target.long(), num_classes=input.shape[1]).permute(0, 3, 1, 2)
-
-        # 4-connectivity
-        weights = torch.tensor([[0., 1., 0.],
-                                [1., 1., 1.],
-                                [0., 1., 0.]], device=input.device, requires_grad=False).view(1, 1, 3, 3).repeat(input.shape[1], 1, 1, 1)
-
-        # TODO consider 8-connectivity
-        # weights = torch.ones((input.shape[1], 1, 3, 3))
-
-        # perform dilation
-        dilated = F.conv2d(one_hot_target.float(), weights, groups=input.shape[1], padding=(1, 1)).bool().long()
+        dilated = get_dilated(target, input.shape[1], input.device, 4)
 
         eps = self.ls / input.shape[1]
 
