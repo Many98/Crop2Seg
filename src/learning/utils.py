@@ -6,6 +6,7 @@ import time
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import torchnet as tnt
 
 # ### small boiler plate to add src to sys path
@@ -58,11 +59,59 @@ def get_model(config):
     return model
 
 
+def get_dilated(target: torch.tensor, n_classes: int, device: str, connectivity: int = 4):
+    """
+    Helper function to get dilated ground truth. Used to determine boundaries of semantic classes
+    Parameters
+    ----------
+    target: torch.tensor
+    n_classes: int
+        Number of classes
+    device: str
+        Device can be `cpu`, `cuda`, or `cuda:1` etc.
+    connectivity: int
+        Connectivity used for dilatation operation. Can be 8 or 4
+    """
+    if connectivity == 8:
+        weights = torch.ones((n_classes, 1, 3, 3), device=device, requires_grad=False)
+    else:
+        weights = torch.tensor([[0., 1., 0.],
+                                [1., 1., 1.],
+                                [0., 1., 0.]], device=device, requires_grad=False).view(1, 1, 3, 3).repeat(
+            n_classes, 1, 1, 1)
+
+    # y is of shape B x H x W
+    one_hot_target = F.one_hot(target.long(), num_classes=n_classes).permute(0, 3, 1, 2)
+
+    return F.conv2d(one_hot_target.float(), weights, groups=n_classes, padding=(1, 1)).bool().long()
+
+
 def iterate(
-        model, data_loader, criterion, config, optimizer=None, mode="train", device=None
+        model, data_loader, criterion, config, optimizer=None, mode="train", device=None, test_region='all'
 ):
+    """
+    helper function implementing training/validation/testing loop
+    Parameters
+    ----------
+    model
+    data_loader
+    criterion
+    config
+    optimizer
+    mode
+    device
+    test_region: str
+        New parameter to test performance on `all` pixels or `boundary` pixels or `interior` pixels
+        Currently works by reclassification to ignore class
+        Note that code expects that there is set ignore index
+    """
     loss_meter = tnt.meter.AverageValueMeter()
     iou_meter = IoU(
+        num_classes=config.num_classes,
+        ignore_index=config.ignore_index,
+        cm_device=config.device,
+    )
+    iou_meter_top2 = IoU(
         num_classes=config.num_classes,
         ignore_index=config.ignore_index,
         cm_device=config.device,
@@ -75,6 +124,30 @@ def iterate(
         (x, dates), y = batch
         y = y.long()
 
+        # -----------HERE ARE EXPERIMENTAL CHANGES ---------------------
+        # boundary is removed from training but not from performance evaluation
+        '''
+        dilated = get_dilated(y, config.num_classes, x.device, 4)  # shape is B x NUM_CLASSES x H x W
+        ignore_label = [i for i in range(config.num_classes)][config.ignore_index]
+        # reclassify boundary to ignore
+        y2 = torch.where(dilated.sum(1) > 1, ignore_label, y)
+        '''
+
+        # ----------------------------------------------
+        # add boundary class as 15th class
+        # boundary will be of course used as 15th class in train and test
+        # dilated = get_dilated(y, config.num_classes, x.device, 4)  # shape is B x NUM_CLASSES x H x W
+
+        # optionally remove background class from boundary calculation totally
+        # dilated[:, 0, ...] = 0
+        #
+        # finally reclassify boundary to 15th class named boundary
+        # y = torch.where(dilated.sum(1) > 1, 15, y)
+
+        # ----------------------------------------------
+        # reclassify boundary as boundary
+        # y = torch.where(dilated.sum(1) > 1, 0, y)
+
         if mode != "train":
             with torch.no_grad():
                 out = model(x, batch_positions=dates)
@@ -82,6 +155,8 @@ def iterate(
             optimizer.zero_grad()
             out = model(x, batch_positions=dates)
 
+        # EXPERIMENTAL SETTING
+        # loss = criterion(out, y2)
         loss = criterion(out, y)
         if mode == "train":
             loss.backward()
@@ -89,14 +164,33 @@ def iterate(
 
         with torch.no_grad():
             pred = out.argmax(dim=1)
+            pred_ = out.topk(2, dim=1).indices
+
+        # Specify test region default is all
+        if test_region in ['boundary', 'interior']:
+            dilated = get_dilated(y, config.num_classes, pred.device, 4)  # shape is B x NUM_CLASSES x H x W
+
+            if test_region == 'boundary':
+                # reclassify interior to ignore
+                ignore_label = [i for i in range(config.num_classes)][config.ignore_index]
+                y = torch.where(dilated.sum(1) == 1, ignore_label, y)
+            elif test_region == 'interior':
+                # reclassify boundary to ignore
+                ignore_label = [i for i in range(config.num_classes)][config.ignore_index]
+                y = torch.where(dilated.sum(1) > 1, ignore_label, y)
+
+        # ----------------------------------------------
+        pred_top2 = torch.where(y == pred_[:, 1, ...], pred_[:, 1, ...], pred_[:, 0, ...])
         iou_meter.add(pred, y)
+        iou_meter_top2.add(pred_top2, y)
         loss_meter.add(loss.item())
 
         if (i + 1) % config.display_step == 0:
             miou, acc = iou_meter.get_miou_acc()
+            miou_top2, acc_top2 = iou_meter_top2.get_miou_acc()
             logging.info(
-                "Step [{}/{}], Loss: {:.4f}, Acc : {:.2f}, mIoU {:.2f}".format(
-                    i + 1, len(data_loader), loss_meter.value()[0], acc, miou
+                "Step [{}/{}], Loss: {:.4f}, Acc : {:.2f}, mIoU {:.2f}, Acc_t2 : {:.2f}, mIoU_t2 {:.2f}".format(
+                    i + 1, len(data_loader), loss_meter.value()[0], acc, miou, acc_top2, miou_top2
                 )
             )
 
@@ -104,15 +198,18 @@ def iterate(
     total_time = t_end - t_start
     logging.info("Epoch time : {:.1f}s".format(total_time))
     miou, acc = iou_meter.get_miou_acc()
+    miou_top2, acc_top2 = iou_meter_top2.get_miou_acc()
     metrics = {
         "{}_accuracy".format(mode): acc,
+        "{}_accuracy_top2".format(mode): acc_top2,
         "{}_loss".format(mode): loss_meter.value()[0],
         "{}_IoU".format(mode): miou,
+        "{}_IoU_top2".format(mode): miou_top2,
         "{}_epoch_time".format(mode): total_time,
     }
 
     if mode == "test":
-        return metrics, iou_meter.conf_metric.value()  # confusion matrix
+        return metrics, iou_meter.conf_metric.value(), iou_meter_top2.conf_metric.value()  # confusion matrix
     else:
         return metrics
 
@@ -142,36 +239,44 @@ def checkpoint(fold, log, config):
         json.dump(log, outfile, indent=4)
 
 
-def save_results(fold, metrics, conf_mat, config):
-    with open(
-            os.path.join(config.res_dir, "Fold_{}".format(fold), "test_metrics.json"), "w"
-    ) as outfile:
-        json.dump(metrics, outfile, indent=4)
+def save_results(fold, metrics, conf_mat, config, name="", top2=False):
+    if not os.path.isfile(os.path.join(config.res_dir, "Fold_{}".format(fold), f"{name}test_metrics.json")):
+        with open(
+                os.path.join(config.res_dir, "Fold_{}".format(fold), f"{name}test_metrics.json"), "w"
+        ) as outfile:
+            json.dump(metrics, outfile, indent=4)
     pkl.dump(
         conf_mat,
         open(
-            os.path.join(config.res_dir, "Fold_{}".format(fold), "conf_mat.pkl"), "wb"
+            os.path.join(config.res_dir, "Fold_{}".format(fold), f"{name}conf_mat{'_top2' if top2 else ''}.pkl"), "wb"
         ),
     )
 
 
-def overall_performance(config, fold=None):
+def overall_performance(config, fold=None, name="", top2=False):
     cm = np.zeros((config.num_classes, config.num_classes))
+
     if fold is None:
         for f in range(1, 6):
+            try:
+                cm += pkl.load(
+                    open(
+                        os.path.join(config.res_dir, f"Fold_{f}", f"{name}conf_mat{'_top2' if top2 else ''}.pkl"),
+                        "rb",
+                    )
+                )
+            except:
+                return
+    else:
+        try:
             cm += pkl.load(
                 open(
-                    os.path.join(config.res_dir, "Fold_{}".format(f), "conf_mat.pkl"),
+                    os.path.join(config.res_dir, f"Fold_{fold}", f"{name}conf_mat{'_top2' if top2 else ''}.pkl"),
                     "rb",
                 )
             )
-    else:
-        cm += pkl.load(
-            open(
-                os.path.join(config.res_dir, "Fold_{}".format(fold), "conf_mat.pkl"),
-                "rb",
-            )
-        )
+        except:
+            return
 
     if config.ignore_index is not None:
         cm = np.delete(cm, config.ignore_index, axis=0)
@@ -184,8 +289,8 @@ def overall_performance(config, fold=None):
 
     perf['folds'] = f'Performance calculated on folds: {"all" if fold is None else fold}'
 
-    with open(os.path.join(config.res_dir, "overall.json"), "w") as file:
+    with open(os.path.join(config.res_dir, f"{name}overall{'_top2' if top2 else ''}.json"), "w") as file:
         file.write(json.dumps(perf, indent=4))
 
-    with open(os.path.join(config.res_dir, "per_class.json"), "w") as file:
+    with open(os.path.join(config.res_dir, f"{name}per_class{'_top2' if top2 else ''}.json"), "w") as file:
         file.write(json.dumps(per_class, indent=4))
