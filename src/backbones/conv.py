@@ -5,7 +5,7 @@ from einops.layers.torch import Rearrange, Reduce
 from einops import reduce, rearrange, repeat
 
 from src.backbones.squeeze_and_excitation import SqueezeAndExcitation
-from src.backbones.temp_shared_block import TemporallySharedBlock
+from src.backbones.temp_shared_block import TemporallySharedBlock, TemporallySharedBlock3D
 
 from src.backbones.utils import experimental
 
@@ -139,6 +139,75 @@ class ConvLayer(nn.Module):
         return self.conv(input)
 
 
+class ConvLayer3D(nn.Module):
+    """
+    Building block of `ConvBlocks`
+    Applies 3D convolution in spatial and channel dimension i.e. filter is sliding in CxHxW
+    Particularly it stacks all parts of "classical" convolution layer
+    i.e. few normalizations and convolutions
+    """
+    def __init__(
+            self,
+            nkernels,
+            norm="batch",
+            k=3,
+            k_3d=3,
+            s=1,
+            p=1,
+            n_groups=4,
+            last_relu=True,
+            padding_mode="reflect",
+            conv_type='2d',
+            add_squeeze=False
+    ):
+        super().__init__()
+        #self.conv_type = conv_type
+        layers = []
+
+        if norm == "batch":
+            nl = nn.BatchNorm3d
+        elif norm == "instance":
+            nl = nn.InstanceNorm3d
+        elif norm == "group":
+            nl = lambda num_feats: nn.GroupNorm(
+                num_channels=num_feats,
+                num_groups=n_groups,
+            )
+        else:
+            nl = None
+
+        self.add_squeeze = add_squeeze
+
+        conv = nn.Conv3d
+        for i in range(len(nkernels) - 1):
+            layers.append(
+                conv(
+                    in_channels=nkernels[i],
+                    out_channels=nkernels[i + 1],
+                    kernel_size=(k_3d, k, k),
+                    padding=(1, p, p),
+                    stride=(1, s, s),
+                    padding_mode=padding_mode,
+                )
+            )
+
+            if nl is not None:
+                layers.append(nl(nkernels[i + 1]))
+
+            if last_relu:
+                layers.append(nn.ReLU())
+            elif i < len(nkernels) - 2:
+                layers.append(nn.ReLU())
+
+        if add_squeeze:
+            layers.append(SqueezeAndExcitation(nkernels[i + 1]))
+
+        self.conv = nn.Sequential(*layers)
+
+    def forward(self, input: Tensor) -> Tensor:
+        return self.conv(input)
+
+
 class ConvBlock(TemporallySharedBlock):
     """
     Building block of UTAE.
@@ -162,6 +231,41 @@ class ConvBlock(TemporallySharedBlock):
     ):
         super().__init__(pad_value=pad_value)
         self.conv = ConvLayer(
+            nkernels=nkernels,
+            norm=norm,
+            last_relu=last_relu,
+            padding_mode=padding_mode,
+            conv_type=conv_type,
+            add_squeeze=add_squeeze
+        )
+
+    def forward(self, input: Tensor) -> Tensor:
+        return self.conv(input)
+
+
+class ConvBlock3D(TemporallySharedBlock3D):
+    """
+    Building block of UTAE.
+    Particularly it is convolutional block used within encoder and decoder part of UTAE.
+    It is responsible for applying: 3D convolution while not changing resolution of feature maps
+
+    Note that `ConvBlock` is child of `TemporallySharedBlock` which effectively
+    just merge batch B and time T dimension into one bigger batch dimension and operates
+    over it with classical convolutions. This merge of B and T dimension is applied only if input id 5D
+    i.e. it is time-series
+    """
+    def __init__(
+            self,
+            nkernels,
+            pad_value=None,
+            norm="batch",
+            last_relu=True,
+            padding_mode="reflect",
+            conv_type='2d',
+            add_squeeze=False
+    ):
+        super().__init__(pad_value=pad_value)
+        self.conv = ConvLayer3D(
             nkernels=nkernels,
             norm=norm,
             last_relu=last_relu,
@@ -215,6 +319,69 @@ class DownConvBlock(TemporallySharedBlock):
             conv_type=conv_type
         )
         self.conv2 = ConvLayer(
+            nkernels=[d_out, d_out],
+            norm=norm,
+            padding_mode=padding_mode,
+            conv_type=conv_type
+        )
+        self.add_squeeze = add_squeeze
+
+        if add_squeeze:
+            self.sae = SqueezeAndExcitation(d_out)
+
+    def forward(self, input: Tensor) -> Tensor:
+        out = self.down(input)
+        out = self.conv1(out)
+        out = out + self.conv2(out)
+
+        out = self.sae(out) if self.add_squeeze else out
+
+        return out
+
+
+class DownConvBlock3D(TemporallySharedBlock3D):
+    """
+    Building block of UTAE.
+    Particularly it is convolutional block used within encoder part of UTAE.
+    It is responsible for applying: 3D convolution while downsize resolution of feature maps
+
+    Note that `DownConvBlock` is child of `TemporallySharedBlock` which effectively
+    just merge batch B and time T dimension into one bigger batch dimension and operates
+    over it with classical convolutions. This merge of B and T dimension is applied only if input id 5D
+    i.e. it is time-series
+    """
+    def __init__(
+            self,
+            d_in,
+            d_out,
+            k,
+            k_3d,
+            s,
+            p,
+            pad_value=None,
+            norm="batch",
+            padding_mode="reflect",
+            conv_type='2d',
+            add_squeeze=False
+    ):
+        super().__init__(pad_value=pad_value)
+        self.down = ConvLayer3D(
+            nkernels=[d_in, d_in],
+            norm=norm,
+            k=k,
+            k_3d=k_3d,
+            s=s,
+            p=p,
+            padding_mode=padding_mode,
+            conv_type=conv_type
+        )
+        self.conv1 = ConvLayer3D(
+            nkernels=[d_in, d_out],
+            norm=norm,
+            padding_mode=padding_mode,
+            conv_type=conv_type
+        )
+        self.conv2 = ConvLayer3D(
             nkernels=[d_out, d_out],
             norm=norm,
             padding_mode=padding_mode,
