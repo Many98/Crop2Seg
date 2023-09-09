@@ -41,7 +41,7 @@ labels_short = ['Background 0', 'Grassland 1', 'Fruit & vegetable 2', 'Summer ce
 
 labels_super_short = ['Background', 'Grassland', 'Fruit_vegetable', 'Summer_cereals',
                       'Winter_cereals', 'Rapeseed', 'Maize', 'Forage crops', 'Sugar_beat', 'Flax_Hemp',
-                      'Permanent_fruit', 'Hopyards', 'Vineyards', 'Other_crops', 'Not_classified']
+                      'Permanent_fruit', 'Hopyards', 'Vineyards', 'Other_crops', 'Not_classified', 'Boundary']
 
 labels_super_short_2 = ['Background', 'Grassland', 'Fruit/vegetable', 'Summer cereals',
                         'Winter cereals', 'Rapeseed', 'Maize', 'Forage crops', 'Sugar beat', 'Flax/Hemp',
@@ -53,6 +53,7 @@ def crop_cmap():
     Auxiliary function to return dictionary with color map used for visualization
     of classes in S2TSCZCrop dataset
     """
+
     def get_rgb(h):
         return list(np.array(list(int(h.lstrip('#')[i:i + 2], 16) for i in (0, 2, 4))) / 255) + [1]
 
@@ -70,7 +71,8 @@ def crop_cmap():
             11: get_rgb('#9299a9'),  # Hopyards
             12: get_rgb('#dea7b0'),  # Vineyards
             13: get_rgb('#ff0093'),  # Other crops
-            14: get_rgb('#f0f8ff'),  # Not classified (removed from training and evaluation)
+            14: get_rgb('#c0d8ed'),  # Not classified (removed from training and evaluation)
+            15: [1, 1, 1, 1]  # Border of semantic classes
             }
 
 
@@ -141,9 +143,9 @@ class S2TSCZCropDataset(tdata.Dataset):
     The Dataset yields ((data, dates), target) tuples, where:
         - data contains the image time series
         - dates contains the date sequence of the observations expressed in number
-          of days since a reference date
+          of days since a reference date or expressed as day of year
+          or vector of two sequences with both representations
         - target is the semantic or instance target
-    TODO adjust it to handle also pretrain dataset ... difference should be only in loading TARGET
     """
 
     def __init__(
@@ -162,6 +164,9 @@ class S2TSCZCropDataset(tdata.Dataset):
             to_date=None,
             channels_like_pastis=True,
             use_doy=False,
+            use_abs_rel_enc=False,
+            transform=None,
+            add_ndvi=False,
             *args, **kwargs
     ):
         """
@@ -194,7 +199,7 @@ class S2TSCZCropDataset(tdata.Dataset):
                 in format 'YYYY-MM-DD' and the closest available date will be selected.
             from_date (int or str, optional):
 
-            to_date: (int or str, optional):  TODO
+            to_date: (int or str, optional):
             channels_like_pastis: bool
                 Whether to rearrange channels to be in same order like in PASTIS dataset.
                 It should be used if one want to fine-tune using UTAE's original pretrained weights.
@@ -204,14 +209,26 @@ class S2TSCZCropDataset(tdata.Dataset):
                     [B04, B03, B02, B08, B05, B06, B07, B8A, B11, B12]
             use_doy: (bool) Whether to use absolute positions for time-series i.e. day of years instead
                            of difference between date and `self.reference_date`
+            use_abs_rel_enc: (bool)
+                Whether to use both relative day positions and absolute (doy) positions.
+                If True parameter `use_doy` will be unused
+            transform: (torchvision.transform)
+                Transformation which will be applied to input tensor and mask
+            add_ndvi: (bool)
+                Whether to add NDVI channel at the end of spectral channels
+
         """
         super().__init__()
         self.folder = folder
         self.norm = norm
         self.norm_values = norm_values
         self.reference_date = datetime(*map(int, reference_date.split("-")))
-        self.use_doy = use_doy
+        self.use_abs_rel_enc = use_abs_rel_enc
+        self.use_doy = False if use_abs_rel_enc else use_doy
         self.set_type = set_type
+
+        self.transform = transform
+        self.add_ndvi = add_ndvi
 
         assert set_type is not None and set_type in ['train', 'test', 'val'], f"`set_type` parameter must be one of" \
                                                                               f"['train', 'test', 'val'] but is {set_type}"
@@ -243,7 +260,7 @@ class S2TSCZCropDataset(tdata.Dataset):
             else class_mapping
         )
 
-        # Get metadata  TODO what to do with this
+        # Get metadata
         logging.info("Reading patch metadata . . .")
         self.meta_patch = pd.read_json(os.path.join(folder, "metadata.json"), orient='records',
                                        dtype={'ID_PATCH': 'int32',
@@ -252,7 +269,7 @@ class S2TSCZCropDataset(tdata.Dataset):
                                               'time-series_length': 'int8',
                                               'crs': 'int16',
                                               'Fold': 'int8'})
-        # self.meta_patch = self.meta_patch[self.meta_patch['Status'] == 'OK']
+
         self.meta_patch = self.meta_patch[(self.meta_patch['Status'] == 'OK') & (self.meta_patch['set'] == set_type)]
 
         if self.meta_patch.empty:
@@ -263,33 +280,6 @@ class S2TSCZCropDataset(tdata.Dataset):
         self.meta_patch.index = self.meta_patch["ID_PATCH"].astype(int)
         self.meta_patch.sort_index(inplace=True)
 
-        '''
-        self.date_tables = {'S2': None}
-        self.date_range = np.array(range(-200, 600))
-
-        dates = self.meta_patch[f"dates-S2"]
-        date_table = pd.DataFrame(
-            index=self.meta_patch.index, columns=self.date_range, dtype=int
-        )
-        for pid, date_seq in dates.iteritems():
-            if pid == 59424:
-                print('f')
-            d = pd.DataFrame().from_dict(date_seq, orient="index")
-            d = d[0].apply(
-                lambda x: (
-                        datetime(int(str(x)[:4]), int(str(x)[4:6]), int(str(x)[6:]))
-                        - self.reference_date
-                ).days
-            )
-            date_table.loc[pid, d.values] = 1
-
-            assert len(date_seq.keys()) == np.where(date_table.loc[pid].values == 1)[0].shape[0]
-        date_table = date_table.fillna(0)
-        self.date_tables['S2'] = {
-            index: np.array(list(d.values()))
-            for index, d in date_table.to_dict(orient="index").items()
-        }
-        '''
         logging.info("Done.")
 
         # Select Fold samples
@@ -307,27 +297,7 @@ class S2TSCZCropDataset(tdata.Dataset):
         if norm:
             if norm_values is None or not isinstance(norm_values, dict):
                 raise Exception(f"Norm parameter set to True but normalization values are not provided.")
-            '''
-            if not os.path.isfile(os.path.join(norm_values_folder, "NORM_S2_patch.json")):
-                raise Exception(f"Norm parameter set to True but normalization values json file for dataset was "
-                                f"not found in specified directory {norm_values_folder} .")
 
-            self.norm = {}
-
-            with open(
-                    os.path.join(norm_values_folder, "NORM_S2_patch.json"), "r"
-            ) as file:
-                normvals = json.loads(file.read())
-            selected_folds = folds if folds is not None else range(1, 6)
-            means = [normvals[f"Fold_{f}"]["mean"] for f in selected_folds]
-            stds = [normvals[f"Fold_{f}"]["std"] for f in selected_folds]
-            self.norm['S2'] = np.stack(means).mean(axis=0), np.stack(stds).mean(axis=0)
-            
-            self.norm['S2'] = (
-                torch.from_numpy(self.norm['S2'][0]).float()[self.channels_order],
-                torch.from_numpy(self.norm['S2'][1]).float()[self.channels_order],
-            )
-            '''
             self.norm = {'S2': (
                 torch.from_numpy(norm_values['mean']).float(),
                 torch.from_numpy(norm_values['std']).float(),
@@ -384,13 +354,31 @@ class S2TSCZCropDataset(tdata.Dataset):
             }  # T x C x H x W arrays
             data = {s: torch.from_numpy(a)[:, self.channels_order, ...] for s, a in data.items()}
 
-            if self.norm is not None:
-                data = {
-                    s: (d - self.norm[s][0][None, :, None, None])
-                       / self.norm[s][1][None, :, None, None]
-                    for s, d in data.items()
-                }
-            # TODO we want to do this bit different
+            if self.add_ndvi:
+                # NDVI B08(NIR) + B04(Red) / B08(NIR) - B04(Red)
+                # NDVI red edge B08(NIR) + B06(Red edge) / B08(NIR) - B06(Red edge)
+                #  we do not normalize it (its by definition between -1, 1)
+                #  no data gets 0 as value
+
+                data_ = data['S2']
+
+                if self.channels_like_pastis:
+                    ndvi = torch.where(data_[:, 6, ...] - data_[:, 2, ...] == 0, 0.,
+                                       (data_[:, 6, ...] + data_[:, 2, ...]) / (data_[:, 6, ...] - data_[:, 2, ...]))
+                else:
+                    ndvi = torch.where(data_[:, 3, ...] - data_[:, 0, ...] == 0, 0.,
+                                       (data_[:, 3, ...] + data_[:, 0, ...]) / (data_[:, 3, ...] - data_[:, 0, ...]))
+
+                if self.norm is not None:
+                    data = {
+                        s: (d - self.norm[s][0][None, :, None, None])
+                           / self.norm[s][1][None, :, None, None]
+                        for s, d in data.items()
+                    }
+
+                # concat with NDVI
+                data = {'S2': torch.cat([data['S2'], ndvi[:, None, ...]], axis=1)}
+
             target = np.load(
                 os.path.join(
                     self.folder, f"ANNOTATIONS", f"TARGET_{id_patch}"  # f"TARGET_{id_patch}.npy"
@@ -414,10 +402,18 @@ class S2TSCZCropDataset(tdata.Dataset):
 
         # Retrieve date sequences
         if not self.cache or id_patch not in self.memory_dates.keys():
+
             dates = {
                 'S2': torch.from_numpy(self.get_dates_absolute(id_patch) if self.use_doy else
                                        self.get_dates_relative(id_patch))
             }
+
+            if self.use_abs_rel_enc:
+                dates2 = {
+                    'S2': torch.from_numpy(self.get_dates_absolute(id_patch) if not self.use_doy else
+                                           self.get_dates_relative(id_patch))
+                }
+
             if self.cache:
                 self.memory_dates[id_patch] = dates
         else:
@@ -435,6 +431,8 @@ class S2TSCZCropDataset(tdata.Dataset):
                 data = {'S2': data['S2'][mono_date['S2']].unsqueeze(0)}
                 dates = {'S2': dates['S2'][mono_date['S2']]}
 
+                # TODO fix this fpr dates2 variable
+
         if self.mem16:
             data = {k: v.float() for k, v in data.items()}
 
@@ -442,11 +440,19 @@ class S2TSCZCropDataset(tdata.Dataset):
         data = data['S2']
         dates = dates['S2']
 
+        if self.use_abs_rel_enc:
+            dates2 = dates2['S2']
+
         assert data.shape[0] == dates.shape[
             0], f'Shape in time dimension does not match for data T={data.shape[0]} and ' \
                 f'for dates T={dates.shape[0]}. Id of patch is {id_patch}'
 
-        return (data, dates), target
+        # transform only on minority classes defined by weight
+        if self.transform and self.set_type == 'train' and self.meta_patch.loc[id_patch, 'weight'] > 4:
+            data, target = self.transform(data, target)  # 4d tensor T x C x H x W, 2d tensor H x W
+
+        return (data, torch.cat([dates[..., None], dates2[..., None]], axis=1)), target if self.use_abs_rel_enc else \
+            (data, dates), target
 
     def rasterize_target(self, item, export=False):
         id_patch = self.id_patches[item]
@@ -635,6 +641,44 @@ def create_train_test_split(folder: str):
     m.to_json(os.path.join(folder, 'metadata_and_stats.json'), indent=4, orient='records')
 
 
+def compute_sample_weights(folder: str):
+    """
+    Auxiliary function to compute weights for every sample based on presence of minority class ...
+    will be used for weighted random sampling with replacement
+    Parameters
+    ----------
+    folder: str
+        Absolute path to directory where is stored dataset
+    Returns
+    -------
+    """
+    stats = pd.read_json(os.path.join(folder, 'metadata_and_stats.json'))
+    m = pd.read_json(os.path.join(folder, 'metadata.json'))
+
+    m.index = m["ID_PATCH"].astype(int)
+    m.sort_index(inplace=True)
+
+    stats = stats[(stats['Status'] == 'OK') & (stats['set'] == 'train')]
+
+    stats.index = stats["ID_PATCH"].astype(int)
+    stats.sort_index(inplace=True)
+
+    s = stats[[i for i in stats.columns if 'Cover' in i and i not in ['Nodata_Cover', 'Snow_Cloud_Cover']]]
+
+    # TODO order of weights is corresponds to order of cover columns in stats dataframe
+    weights = np.array([0, 1, 1, 0, 0, 0, 0, 5, 0, 14, 8, 4, 4, 0, 0])
+
+    kk = (s * weights.astype(bool).astype(int)).astype(bool).astype(int) * weights
+
+    kk['total'] = kk.sum(axis=1)
+
+    kk.loc[kk.total == 0, 'total'] = 1
+
+    m.loc[kk.index, 'weight'] = kk.total
+
+    m.to_json(os.path.join(folder, 'metadata.json'), indent=4, orient='records')
+
+
 def compute_norm_vals(folder: str):
     """
     Auxiliary function to generate mean and std over train dataset
@@ -667,7 +711,8 @@ def compute_norm_vals(folder: str):
 
 
 if __name__ == '__main__':
-    d = S2TSCZCropDataset(folder='/disk2/<username>/S2TSCZCrop', set_type='test', norm=True, use_doy=False)
+    d = S2TSCZCropDataset(folder='/disk2/<username>/S2TSCZCrop', set_type='train', norm=False,
+                          use_doy=False)
     out = d[0]  # (data, dates), target
 
     r1 = d.rasterize_target(0, export=False)
