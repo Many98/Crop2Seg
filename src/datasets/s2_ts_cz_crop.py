@@ -451,8 +451,10 @@ class S2TSCZCropDataset(tdata.Dataset):
         if self.transform and self.set_type == 'train' and self.meta_patch.loc[id_patch, 'weight'] > 4:
             data, target = self.transform(data, target)  # 4d tensor T x C x H x W, 2d tensor H x W
 
-        return (data, torch.cat([dates[..., None], dates2[..., None]], axis=1)), target if self.use_abs_rel_enc else \
-            (data, dates), target
+        if self.use_abs_rel_enc:
+            return (data, torch.cat([dates[..., None], dates2[..., None]], axis=1)), target
+        else:
+            return (data, dates), target
 
     def rasterize_target(self, item, export=False):
         id_patch = self.id_patches[item]
