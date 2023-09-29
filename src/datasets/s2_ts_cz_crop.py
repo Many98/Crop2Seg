@@ -369,14 +369,15 @@ class S2TSCZCropDataset(tdata.Dataset):
                     ndvi = torch.where(data_[:, 3, ...] - data_[:, 0, ...] == 0, 0.,
                                        (data_[:, 3, ...] + data_[:, 0, ...]) / (data_[:, 3, ...] - data_[:, 0, ...]))
 
-                if self.norm is not None:
-                    data = {
-                        s: (d - self.norm[s][0][None, :, None, None])
-                           / self.norm[s][1][None, :, None, None]
-                        for s, d in data.items()
-                    }
+            if self.norm is not None:
+                data = {
+                    s: (d - self.norm[s][0][None, :, None, None])
+                       / self.norm[s][1][None, :, None, None]
+                    for s, d in data.items()
+                }
 
-                # concat with NDVI
+            # concat with NDVI
+            if self.add_ndvi:
                 data = {'S2': torch.cat([data['S2'], ndvi[:, None, ...]], axis=1)}
 
             target = np.load(
