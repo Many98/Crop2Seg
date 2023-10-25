@@ -38,10 +38,6 @@ from src.global_vars import SENTINEL_PATH_DATASET, AGRI_PATH_DATASET, DATES, CLO
 logging.getLogger().setLevel(logging.INFO)
 
 
-# TODO it should be processed slightly different for pretrain dataset, probably iterate using DatasetCreator via subdirs
-#  containing different timeseries
-
-
 class DatasetCreator(object):
     """
     Creates time-series dataset of Sentinel-2 tiles (patches) of shape T x C x H x W.
@@ -61,7 +57,7 @@ class DatasetCreator(object):
 
     def __init__(self, output_dataset_path: str, features_path: str = AGRI_PATH_DATASET,
                  tiles_path: str = SENTINEL_PATH_DATASET,
-                 for_pretraining: bool = False,
+                 for_inference: bool = False,
                  download: bool = False,
                  delete_source_tiles: bool = False
                  ):
@@ -79,9 +75,8 @@ class DatasetCreator(object):
         tiles_path: str
             Absolute path to Sentinel 2 L2A tiles (time-series) i.e. all tiles over same area will be used to
             create time-series
-        for_pretraining: bool
-            Whether to create dataset for pretraining.
-            If `for_pretraining=True` it is expected that in `tiles_path` TODO ...
+        for_inference: bool
+            Whether to create data for inference.
         download: bool
             Whether to also download particular tiles
         delete_source_tiles: bool
@@ -91,7 +86,7 @@ class DatasetCreator(object):
         self.features_path = features_path  # path of dataset where is stored shapefile
         self.out_path = output_dataset_path  # path to output dataset/ where to create dataset
 
-        self.for_pretraining = for_pretraining
+        self.for_inference = for_inference
 
         self.download = download
         self.delete_source = delete_source_tiles
@@ -101,13 +96,9 @@ class DatasetCreator(object):
         self.data_s2_path = os.path.join(self.out_path, 'DATA_S2')
         os.makedirs(self.data_s2_path, exist_ok=True)
 
-        if not self.for_pretraining:
+        if not self.for_inference:
             self.segmentation_path = os.path.join(self.out_path, 'ANNOTATIONS')
             os.makedirs(self.segmentation_path, exist_ok=True)
-
-        # TODO create also structure for PRETRAIN DATASET
-        # TODO when creating pretrain dataset there must be another structure of `tiles_path` e.g. subdirectory
-        #  for every time-series
 
         self.features = None
 
@@ -119,7 +110,8 @@ class DatasetCreator(object):
                  'Snow_Cloud_Cover': [], 'TILE': [], 'dates-S2': [], 'time-series_length': [],
                  'crs': [], 'affine': [], 'Fold': [], 'Status': [], 'set': []})
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, tile_names=TILES, clouds=CLOUDS, dates=DATES, bounds=None, account=None, password=None,
+                 *args, **kwargs):
         """
         Method to connect all processing steps
         Parameters
@@ -131,7 +123,6 @@ class DatasetCreator(object):
         -------
 
         """
-        tile_names = TILES
 
         for id, tile_name in enumerate(tile_names):
 
@@ -141,48 +132,47 @@ class DatasetCreator(object):
 
             if self.download:
                 logging.info(f"DOWNLOADING TILES WITH NAME: {tile_name}")
-                self._download_timeseries(
-                    tile_name)  # TODO this will not work for PRETRAIN DATASET ... another dir struct
+                self._download_timeseries(tile_name, clouds=clouds, dates=dates, account=account, password=password)
 
             logging.info(f"CONSTRUCTING TIME-SERIES FOR TILE: {tile_name}")
-            time_series, bbox, affine, crs, file_names, dates = self._load_s2(tile_name)  # T x (C+1) x H x W
+            time_series, bbox, affine, crs, file_names, dates = self._load_s2(tile_name,
+                                                                              bounds=bounds)  # T x (C+1) x H x W
             logging.info(f"LENGTH OF TIME-SERIES IS: {len(file_names)}")
 
             time_series = self._preprocess(time_series)  # T x (C+1) x H x W
 
-            if not self.for_pretraining:
+            if not self.for_inference:
                 logging.info(f"GENERATING SEGMENTATION MASK FOR TILE: {tile_name}")
                 segmentation_mask = self._create_segmentation(time_series.shape[-2:], affine, bbox)  # H x W
                 patches_segment, _ = self._patchify(segmentation_mask, affine)  # NUM_PATCHES x PATCH_SIZE x PATCH_SIZE
 
-            patches_s2, patches_affine = self._patchify(time_series,
-                                                        affine)  # NUM_PATCHES x T x C+1 x PATCH_SIZE x PATCH_SIZE
+                patches_s2, patches_affine = self._patchify(time_series,
+                                                            affine)  # NUM_PATCHES x T x C+1 x PATCH_SIZE x PATCH_SIZE
 
-            del time_series
-            del segmentation_mask
+                del time_series
+                del segmentation_mask
 
-            logging.info(f"POSTPROCESSING TIME-SERIES FOR TILE: {tile_name}")
-            patches_bool_map, nodata_cover, snow_cloud_cover, background_cover = self._postprocess_s2(patches_s2)
-            if not self.for_pretraining:
+                logging.info(f"POSTPROCESSING TIME-SERIES FOR TILE: {tile_name}")
+                patches_bool_map, nodata_cover, snow_cloud_cover, background_cover = self._postprocess_s2(patches_s2)
+
                 # NOTE that we set as valid only those patches which have background pixels percentage <= 0.7
                 patches_bool_map, background_cover = self._postprocess_segmentation(patches_segment, 0.7)
 
-            # we do not save scene classification, it was only used to get number of nodata_pixels and snow&cloud pixels
-            logging.info(f"SAVING TIME-SERIES DATA FOR TILE: {tile_name}")
-            self._save_patches(patches_s2[:, :, :-1, ...], patches_bool_map, where=self.data_s2_path,
-                               filename=f'S2', id=id)
+                # we do not save scene classification, it was only used to get number of nodata_pixels and snow&cloud pixels
+                logging.info(f"SAVING TIME-SERIES DATA FOR TILE: {tile_name}")
+                self._save_patches(patches_s2[:, :, :-1, ...], patches_bool_map, where=self.data_s2_path,
+                                   filename=f'S2', id=id)
 
-            del patches_s2
+                del patches_s2
 
-            if not self.for_pretraining:
                 self._save_patches(patches_segment, patches_bool_map, where=self.segmentation_path,
                                    filename=f'TARGET', id=id)
 
-            del patches_segment
+                del patches_segment
 
-            logging.info(f"UPDATING METADATA FOR PATCHES OF TILE: {tile_name}")
-            self._update_metadata(id, tile_name, dates, crs, patches_affine, patches_bool_map, nodata_cover,
-                                  snow_cloud_cover, background_cover)
+                logging.info(f"UPDATING METADATA FOR PATCHES OF TILE: {tile_name}")
+                self._update_metadata(id, tile_name, dates, crs, patches_affine, patches_bool_map, nodata_cover,
+                                      snow_cloud_cover, background_cover)
 
             if self.delete_source:
                 logging.info(f"REMOVING TILES WITH NAME: {tile_name}")
@@ -191,6 +181,8 @@ class DatasetCreator(object):
             logging.info(f"PATCHES FOR TILE {tile_name} GENERATED SUCCESSFULLY \n"
                          f"------------------------------------------------------\n\n")
             gc.collect()
+        if self.for_inference:
+            return time_series, dates
 
         # TODO train/val/test splits are dependent on crop type classes and therefore
         #  one must do splits himself
@@ -202,7 +194,8 @@ class DatasetCreator(object):
         logging.info("GENERATING NORMALIZATION VALUES FOR DATASET")
         compute_norm_vals(self.out_path)
         '''
-    def crop(self, tile_name: str, top: int, left: int,  size: int = 1024) -> \
+
+    def crop(self, tile_name: str, top: int, left: int, size: int = 1024) -> \
             Tuple[np.ndarray, np.ndarray, rasterio.Affine, int, list]:
         """
         Method to crop `bbox` from tile named `tilename` and create time-series
@@ -221,7 +214,7 @@ class DatasetCreator(object):
 
         raster = Sentinel2Raster(os.path.join(self.tiles_path, file_names[0]))
 
-        #py, px = raster.index(left, top)  # lon is x coordinate, lat is y coordinate
+        # py, px = raster.index(left, top)  # lon is x coordinate, lat is y coordinate
 
         w = rasterio.windows.Window(left, top, size, size)
         new_affine = rasterio.windows.transform(w, raster.transform)
@@ -233,7 +226,7 @@ class DatasetCreator(object):
 
         logging.info(f"LENGTH OF TIME-SERIES IS: {len(file_names)}")
 
-        cropped_time_series = self._preprocess(time_series[:, :, top:top+size, left:left+size])  # T x (C+1) x H x W
+        cropped_time_series = self._preprocess(time_series[:, :, top:top + size, left:left + size])  # T x (C+1) x H x W
         segmentation_mask = self._create_segmentation(cropped_time_series.shape[-2:], new_affine, bbox)  # H x W
         del time_series
 
@@ -274,7 +267,7 @@ class DatasetCreator(object):
         for f in file_names:
             shutil.rmtree(os.path.join(self.tiles_path, f))
 
-    def _download_timeseries(self, tile_name: str) -> None:
+    def _download_timeseries(self, tile_name: str, clouds, dates, account=None, password=None) -> None:
         """
         Auxiliary method to download time-series by `tile_name`
         It should call `sentinel` etc functions
@@ -286,12 +279,13 @@ class DatasetCreator(object):
         -------
 
         """
-        for cloud, date in zip(CLOUDS, DATES):
+        for cloud, date in zip(clouds, dates):
             try:
                 sentinel(polygon=None, tile_name=tile_name, platformname='Sentinel-2', producttype='S2MSI2A',
-                         count=5,
+                         count=5,  # max 5 images per month
                          beginposition=date,
-                         cloudcoverpercentage=f'[0 TO {cloud}]', path_to_save=self.tiles_path)
+                         cloudcoverpercentage=f'[0 TO {cloud}]', path_to_save=self.tiles_path,
+                         account=account, password=password)
             except RuntimeError as e:
                 logging.info(e.__str__())
                 logging.info(f'Skipping date:tile {date}:{tile_name}')
@@ -337,7 +331,7 @@ class DatasetCreator(object):
 
         # return rearrange(cropped, 't c (h h1) (w w1) -> (h w) t c h1 w1', h1=128, w1=128)
         return rearrange(cropped, '... (h h1) (w w1) -> (h w) ... h1 w1', h1=patch_size, w1=patch_size), \
-               coords
+            coords
 
     def _save_patches(self, data: np.ndarray, bool_map: np.ndarray, where: str, filename: str, id: int) -> None:
         """
@@ -380,8 +374,9 @@ class DatasetCreator(object):
                 f.split('_')[5] == tile_name and
                 f.split('_')[1].endswith('L2A')]
 
-    def _load_s2(self, tile_name: str) -> Tuple[np.ndarray, rasterio.coords.BoundingBox, rasterio.Affine,
-                                                int, List[str], List[str]]:
+    def _load_s2(self, tile_name: str, bounds: list = None) -> Tuple[
+        np.ndarray, rasterio.coords.BoundingBox, rasterio.Affine,
+        int, List[str], List[str]]:
         """
         Auxiliary method to load time-series corresponding to `tile_name`.
         It also serves for up-sampling to 10m
@@ -389,6 +384,8 @@ class DatasetCreator(object):
         ----------
         tile_name : str
             Name of tile
+        bounds: list
+            [left, bottom, right, top] coordinates of bbox
         Returns
         -------
         extracted time-series array of shape T x (C+1) x H x W
@@ -418,7 +415,7 @@ class DatasetCreator(object):
         logging.getLogger().disabled = True
         time_series = []
         for r in tqdm(rasters, desc="Loading rasters..."):
-            time_series.append(r.read())
+            time_series.append(r.read(bounds=bounds))
         logging.getLogger().disabled = False
 
         return np.stack(time_series, axis=0), bbox, affine, crs, file_names, dates
@@ -431,22 +428,24 @@ class DatasetCreator(object):
         -------
         GeodataFrame of (filtered) features
         """
-        if self.features is None:
-            logging.info(f"LOADING INPUT FEATURES FROM {self.features_path}")
-            self.features = gpd.read_file(self.features_path)  # it should be .shp file
-            logging.info("GENERATING SPATIAL INDEX FOR FEATURES")
-            self.features.sindex
-
         assert isinstance(bbox,
                           rasterio.coords.BoundingBox), 'bbox is expected to be of type `rasterio.coords.BoundingBox`'
-        if bbox is not None:
-            logging.info(f"FILTERING FEATURES DATASET FOR CURRENT EXTENT")
-            indices = self.features.sindex.query(shapely_box(bbox.left, bbox.bottom, bbox.right, bbox.top),
-                                                 predicate='intersects')
+
+        if self.features is None:
+            logging.info(f"LOADING INPUT FEATURES FROM {self.features_path}")
+            self.features = gpd.read_file(self.features_path, bbox=bbox)  # it should be .shp file
+            # logging.info("GENERATING SPATIAL INDEX FOR FEATURES")
+            # self.features.sindex
+
+        # if bbox is not None:
+        #    logging.info(f"FILTERING FEATURES DATASET FOR CURRENT EXTENT")
+        #    indices = self.features.sindex.query(shapely_box(bbox.left, bbox.bottom, bbox.right, bbox.top),
+        #                                         predicate='intersects')
         # return self.features.cx[bbox.left:bbox.right, bbox.bottom:bbox.top] if bbox is not None else self.features
         # cx method is too slow ... using spatial index instead
 
-        return self.features.iloc[indices] if bbox is not None else self.features
+        # return self.features.iloc[indices] if bbox is not None else self.features
+        return self.features
 
     def _preprocess(self, time_series: np.ndarray) -> np.ndarray:
         """
@@ -487,15 +486,19 @@ class DatasetCreator(object):
         """
         # NOTE that patch size is 128 => there is 128 ** 2 pixels
 
-        assert time_series.ndim == 5, '`time_series` argument is expected to be of dimension 3, but is of' \
-                                      f'dimension {time_series.ndim}'
-        tt = time_series[:, :, -1, ...]
+        assert time_series.ndim in [4, 5], '`time_series` argument is expected to be of dimension 3, but is of' \
+                                           f'dimension {time_series.ndim}'
+        if time_series.ndim == 5:
+            tt = time_series[:, :, -1, ...]
+        else:
+            tt = time_series[:, -1, ...]
+
         no_data = np.where(tt <= 1, 1, 0)
         cloud_snow_shadow = np.where(((2 <= tt) & (tt <= 3)) | (8 <= tt), 1, 0)
 
         return np.ones((time_series.shape[0],), dtype=bool), \
-               rearrange(no_data, '... h w -> ... (h w)').sum(-1) / 128 ** 2, \
-               rearrange(cloud_snow_shadow, '... h w -> ... (h w)').sum(-1) / 128 ** 2, None
+            rearrange(no_data, '... h w -> ... (h w)').sum(-1) / 128 ** 2, \
+            rearrange(cloud_snow_shadow, '... h w -> ... (h w)').sum(-1) / 128 ** 2, None
 
     def _postprocess_segmentation(self, segmentation_mask: np.ndarray, threshold: float) -> Tuple[
         np.ndarray, np.ndarray]:
