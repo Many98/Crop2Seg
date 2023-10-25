@@ -22,24 +22,18 @@ from rasterio import mask
 
 import numpy as np
 import cv2
-import ray
-from filelock import FileLock
-import subprocess
-import re
-
 
 # ### small boiler plate to add src to sys path
 import sys
 from pathlib import Path
+
 file = Path(__file__).resolve()
 root = str(file).split('src')[0]
 sys.path.append(root)
 # --------------------------------------
 
-from src.helpers.utils import distribute_args
-
 from src.global_vars import ODATA_URI, ODATA_RESOURCE, OPENSEARCH_URI, ACCOUNT, PASSWORD, \
-    SENTINEL_PATH_DATASET, SEN2COR, TILES, DATES, CLOUDS, MAX_CLOUD, MAX_SNOW, MIN_SIZE_L2A, MIN_SIZE_L1C
+    SENTINEL_PATH_DATASET, TILES, DATES, CLOUDS, MAX_CLOUD, MAX_SNOW, MIN_SIZE_L2A, MIN_SIZE_L1C
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -129,9 +123,11 @@ def sentinel_query(polygon, opensearch_uri=OPENSEARCH_URI, count=5, account=ACCO
 
         """
         if tile_type == 'L1C':
-            return (-(cloud / (MAX_CLOUD // 10)) + 10) * ((size / 100) - MIN_SIZE_L1C/100) if (size >= MIN_SIZE_L1C and cloud <= MAX_CLOUD) else 0.0
+            return (-(cloud / (MAX_CLOUD // 10)) + 10) * ((size / 100) - MIN_SIZE_L1C / 100) if (
+                        size >= MIN_SIZE_L1C and cloud <= MAX_CLOUD) else 0.0
         elif tile_type == 'L2A':
-            return (-(cloud / (MAX_CLOUD // 10)) + 10) * ((size / 100) - MIN_SIZE_L2A/100) if (size >= MIN_SIZE_L2A and cloud <= MAX_CLOUD) else 0.0
+            return (-(cloud / (MAX_CLOUD // 10)) + 10) * ((size / 100) - MIN_SIZE_L2A / 100) if (
+                        size >= MIN_SIZE_L2A and cloud <= MAX_CLOUD) else 0.0
         else:
             return None
 
@@ -208,7 +204,8 @@ def sentinel_query(polygon, opensearch_uri=OPENSEARCH_URI, count=5, account=ACCO
             size_filter = MIN_SIZE_L1C if tile_type == 'L1C' else MIN_SIZE_L2A
             size = float(size[0]) if size[1] == 'MB' else float(size[0]) * 1000
 
-            if float(_snow[0]['content']) <= MAX_SNOW and size >= size_filter and float(_cloud[0]['content']) <= MAX_CLOUD:
+            if float(_snow[0]['content']) <= MAX_SNOW and size >= size_filter and float(
+                    _cloud[0]['content']) <= MAX_CLOUD:
                 id_list.append(json_feed['entry']['id'])  # in this case only one id is in json_feed
             else:
                 logging.info(f"SKIPPING DUE TO FILTER RESTRICTIONS")
@@ -324,7 +321,7 @@ def sentinel_unzip(path_dataset=SENTINEL_PATH_DATASET):
 def sentinel(polygon=None, tile_name=None, count=4, platformname='Sentinel-2', path_to_save=SENTINEL_PATH_DATASET,
              producttype='S2MSI2A', filename=None, beginposition='[NOW-30DAYS TO NOW]',
              cloudcoverpercentage='[0 TO 5]', polarisationmode='VV VH',
-             sensoroperationalmode='IW', **kwargs):
+             sensoroperationalmode='IW', account=ACCOUNT, password=PASSWORD, **kwargs):
     """
     Downloads and unzip given Sentinel product.
     Unsuccessful searches can be caused because of interference of arguments ('intersections' of conditions
@@ -530,70 +527,17 @@ def sentinel(polygon=None, tile_name=None, count=4, platformname='Sentinel-2', p
     args = {k: v for k, v in args.items() if v is not None}
 
     # FINALLY CALL FUNCTION TO PERFORM SEARCH
-    id_list, json_feed, num_results, passed_indices = sentinel_query(polygon, count=count, **args, **kwargs)
+    id_list, json_feed, num_results, passed_indices = sentinel_query(polygon, count=count, account=account,
+                                                                     password=password, **args, **kwargs)
 
     # DOWNLOAD TILES
-    sentinel_download(id_list, json_feed, passed_indices, path_dataset=path_to_save)
+    sentinel_download(id_list, json_feed, passed_indices, path_dataset=path_to_save, account=account, password=password)
 
     # in last pass it always left some unziped tiles
     time.sleep(10)
 
     # UNZIP TILES
     sentinel_unzip(path_dataset=path_to_save)
-
-
-def sentinel_sen2cor(path_dataset=SENTINEL_PATH_DATASET, n_jobs=15, inplace=True,
-                     sen2cor_path=SEN2COR):
-    """
-    Performs sen2cor processing on all L1C tiles.
-    This assumes that sen2cor was already installed. (See.: https://step.esa.int/main/snap-supported-plugins/sen2cor/)
-    Parameters
-    ----------
-    path_dataset: str
-        Path where are stored L1C tiles to be processed
-    n_jobs: int
-        Number of concurrent jobs to be run
-    sen2cor_path: str
-        Path to sen2cor executable
-    Returns
-    -------
-
-    """
-    os.chdir(path_dataset)
-    already_processed = ['_'.join([f.split('_')[2], f.split('_')[5]]) for f in os.listdir(path_dataset) if
-                         re.search(r'(L2A).*\.SAFE$', f)]
-    tiles_all = [f for f in os.listdir(path_dataset) if re.search(r'(L1C).*\.SAFE$', f)]
-    tiles_all = [tile for tile in tiles_all if
-                 '_'.join([tile.split('_')[2], tile.split('_')[5]]) not in already_processed]
-    args = distribute_args(tiles_all, n_jobs)
-    tiles_all = [[tiles_all[j] for j in range(i[0], i[1])] for i in args]
-
-    n_jobs = len(tiles_all)
-
-    @ray.remote
-    def run_sen2cor(tiles_part):
-        for tile in tqdm(tiles_part, desc=f'Processing with sen2cor...'):
-            if tile is not None:
-                _ = subprocess.run([sen2cor_path, tile])
-                with FileLock("processed.txt.lock"):
-                    with open("processed.txt", "a") as f:
-                        f.write(tile)
-                if inplace:
-                    try:
-                        shutil.rmtree(tile)
-                    except OSError as e:
-                        logging.info(f"Error: {tile} : {e.strerror}")
-                        with FileLock("log.txt.lock"):
-                            with open("log.txt", "a") as f:
-                                f.write(f"Error deleting: {tile} : {e.strerror}")
-                        continue
-
-    ray.init(num_cpus=n_jobs)
-
-    results_id = [run_sen2cor.remote(tiles_part) for tiles_part in tiles_all]
-    _ = [ray.get(results_id)]
-
-    ray.shutdown()
 
 
 def sentinel_scl_dictionary(inverse=False):
@@ -900,7 +844,8 @@ def sentinel_get_tilebounds(path_tile, tiles_path=SENTINEL_PATH_DATASET):
     return bounds
 
 
-def sentinel_load_mask(path_tile, where_to_export, path_dataset=SENTINEL_PATH_DATASET, mask_type='CLOUDS', out_resolution=20,
+def sentinel_load_mask(path_tile, where_to_export, path_dataset=SENTINEL_PATH_DATASET, mask_type='CLOUDS',
+                       out_resolution=20,
                        return_reader=False):
     """
     Loads specified mask for L1C or L2A and returns np.array representation of this mask in specified resolution
