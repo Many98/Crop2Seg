@@ -7,3 +7,14 @@
 *.ovr
 *.cpg
 *.dbf
+__pycache__/
+
+*.zip
+*.png
+*.shp
+*.prj
+*.shx
+*.SAFE
+*.jpg
+*.jpeg
+*.tif
