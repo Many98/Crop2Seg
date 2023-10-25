@@ -868,7 +868,7 @@ def plot_proba_mask(proba_mask):
     """
     fig, ax = plt.subplots()
     sns.heatmap(proba_mask, xticklabels=False, yticklabels=False, annot=False, ax=ax)
-    ax.set_title(f'Pravdepodobnostná maska.')
+    ax.set_title(f'Confidence map')
 
     return fig
 
