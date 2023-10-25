@@ -21,12 +21,18 @@ class PASTISDataset(tdata.Dataset):
             cache=False,
             mem16=False,
             folds=None,
-            norm_folds=None,  # TODO added 24.7.23
+            norm_folds=None,  # added 24.7.23
+            norm_values=None,  # added 29.9.23
             reference_date="2018-09-01",
             class_mapping=None,
             mono_date=None,
             sats=["S2"],
             use_doy=False,
+            use_abs_rel_enc=False,
+            transform=None,
+            add_ndvi=False,
+            set_type='train',
+            temporal_dropout=0.0,
             *args, **kwargs
     ):
         """
@@ -76,6 +82,13 @@ class PASTISDataset(tdata.Dataset):
                 in v1.0)
             use_doy: (bool) Whether to use absolute positions for time-series i.e. day of years instead
                            of difference between date and `self.reference_date`
+            use_abs_rel_enc: (bool)
+                Whether to use both relative day positions and absolute (doy) positions.
+                If True parameter `use_doy` will be unused
+            transform: (torchvision.transform)
+                Transformation which will be applied to input tensor and mask
+            add_ndvi: (bool)
+                Whether to add NDVI channel at the end of spectral channels
         """
         super(PASTISDataset, self).__init__()
         self.folder = folder
@@ -93,8 +106,16 @@ class PASTISDataset(tdata.Dataset):
         )
         self.target = target
         self.sats = sats
+        self.set_type = set_type
+        self.temporal_dropout = temporal_dropout
 
-        self.use_doy = use_doy
+        self.norm_values = norm_values
+
+        self.use_abs_rel_enc = use_abs_rel_enc
+        self.use_doy = False if use_abs_rel_enc else use_doy
+
+        self.transform = transform
+        self.add_ndvi = add_ndvi
 
         # Get metadata
         logging.info("Reading patch metadata . . .")
@@ -115,20 +136,13 @@ class PASTISDataset(tdata.Dataset):
 
         # Get normalisation values
         if norm:
-            self.norm = {}
-            for s in self.sats:
-                with open(
-                        os.path.join(folder, "NORM_{}_patch.json".format(s)), "r"
-                ) as file:
-                    normvals = json.loads(file.read())
-                selected_folds = norm_folds if norm_folds is not None else range(1, 6)
-                means = [normvals["Fold_{}".format(f)]["mean"] for f in selected_folds]
-                stds = [normvals["Fold_{}".format(f)]["std"] for f in selected_folds]
-                self.norm[s] = np.stack(means).mean(axis=0), np.stack(stds).mean(axis=0)
-                self.norm[s] = (
-                    torch.from_numpy(self.norm[s][0]).float(),
-                    torch.from_numpy(self.norm[s][1]).float(),
-                )
+            if norm_values is None or not isinstance(norm_values, dict):
+                raise Exception(f"Norm parameter set to True but normalization values are not provided.")
+
+            self.norm = {'S2': (
+                torch.from_numpy(norm_values['mean']).float(),
+                torch.from_numpy(norm_values['std']).float(),
+            )}
         else:
             self.norm = None
         logging.info("Dataset ready.")
@@ -183,12 +197,28 @@ class PASTISDataset(tdata.Dataset):
             }  # T x C x H x W arrays
             data = {s: torch.from_numpy(a) for s, a in data.items()}
 
+            if self.add_ndvi:
+                # NDVI B08(NIR) + B04(Red) / B08(NIR) - B04(Red)
+                # NDVI red edge B08(NIR) + B06(Red edge) / B08(NIR) - B06(Red edge)
+                #  we do not normalize it (its by definition between -1, 1)
+                #  no data gets 0 as value
+
+                data_ = data['S2']
+
+                ndvi = torch.where(data_[:, 3, ...] + data_[:, 0, ...] == 0, 0.,
+                                   (data_[:, 3, ...] - data_[:, 0, ...]) / (data_[:, 3, ...] + data_[:, 0, ...]))
+
+                ndvi = torch.where((ndvi < -1) | (ndvi > 1), 0, ndvi)
             if self.norm is not None:
                 data = {
                     s: (d - self.norm[s][0][None, :, None, None])
                        / self.norm[s][1][None, :, None, None]
                     for s, d in data.items()
                 }
+
+            # concat with NDVI
+            if self.add_ndvi:
+                data = {'S2': torch.cat([data['S2'], ndvi[:, None, ...]], axis=1)}
 
             if self.target == "semantic":
                 target = np.load(
@@ -280,6 +310,13 @@ class PASTISDataset(tdata.Dataset):
                 s: torch.from_numpy(self.get_dates_absolute(id_patch, s) if self.use_doy else
                                     self.get_dates_relative(id_patch, s)) for s in self.sats
             }
+
+            if self.use_abs_rel_enc:
+                dates2 = {
+                    'S2': torch.from_numpy(self.get_dates_absolute(id_patch, 'S2') if not self.use_doy else
+                                           self.get_dates_relative(id_patch, 'S2'))
+                }
+
             if self.cache:
                 self.memory_dates[id_patch] = dates
         else:
@@ -300,11 +337,26 @@ class PASTISDataset(tdata.Dataset):
         if self.mem16:
             data = {k: v.float() for k, v in data.items()}
 
-        if len(self.sats) == 1:
-            data = data[self.sats[0]]
-            dates = dates[self.sats[0]]
+        # we work only with S2 data
+        data = data['S2']
+        dates = dates['S2']
 
-        return (data, dates), target
+        if self.use_abs_rel_enc:
+            dates2 = dates2['S2']
+
+        if self.set_type == 'train' and self.temporal_dropout > 0.:
+            # remove acquisition with probability of temporal_dropout
+            probas = torch.rand(data.shape[0])
+            drop = torch.where(probas > self.temporal_dropout)[0]
+            data = data[drop]
+            dates = dates[drop]
+            if self.use_abs_rel_enc:
+                dates2 = dates2[drop]
+
+        if self.use_abs_rel_enc:
+            return (data, torch.cat([dates[..., None], dates2[..., None]], axis=1)), target
+        else:
+            return (data, dates), target
 
 
 def prepare_dates(date_dict, reference_date):
