@@ -167,6 +167,7 @@ class S2TSCZCropDataset(tdata.Dataset):
             use_abs_rel_enc=False,
             transform=None,
             add_ndvi=False,
+            temporal_dropout=0.0,
             *args, **kwargs
     ):
         """
@@ -229,6 +230,7 @@ class S2TSCZCropDataset(tdata.Dataset):
 
         self.transform = transform
         self.add_ndvi = add_ndvi
+        self.temporal_dropout = temporal_dropout
 
         assert set_type is not None and set_type in ['train', 'test', 'val'], f"`set_type` parameter must be one of" \
                                                                               f"['train', 'test', 'val'] but is {set_type}"
@@ -363,11 +365,13 @@ class S2TSCZCropDataset(tdata.Dataset):
                 data_ = data['S2']
 
                 if self.channels_like_pastis:
-                    ndvi = torch.where(data_[:, 6, ...] - data_[:, 2, ...] == 0, 0.,
-                                       (data_[:, 6, ...] + data_[:, 2, ...]) / (data_[:, 6, ...] - data_[:, 2, ...]))
+                    ndvi = torch.where(data_[:, 6, ...] + data_[:, 2, ...] == 0, 0.,
+                                       (data_[:, 6, ...] - data_[:, 2, ...]) / (data_[:, 6, ...] + data_[:, 2, ...]))
                 else:
-                    ndvi = torch.where(data_[:, 3, ...] - data_[:, 0, ...] == 0, 0.,
-                                       (data_[:, 3, ...] + data_[:, 0, ...]) / (data_[:, 3, ...] - data_[:, 0, ...]))
+                    ndvi = torch.where(data_[:, 3, ...] + data_[:, 0, ...] == 0, 0.,
+                                       (data_[:, 3, ...] - data_[:, 0, ...]) / (data_[:, 3, ...] + data_[:, 0, ...]))
+
+                ndvi = torch.where((ndvi < -1) | (ndvi > 1), 0, ndvi)
 
             if self.norm is not None:
                 data = {
@@ -441,6 +445,10 @@ class S2TSCZCropDataset(tdata.Dataset):
         data = data['S2']
         dates = dates['S2']
 
+        #new_dates = torch.where(dates > 190)[0]
+        #dates = dates[new_dates] - 190
+        #data = data[new_dates]
+
         if self.use_abs_rel_enc:
             dates2 = dates2['S2']
 
@@ -451,6 +459,25 @@ class S2TSCZCropDataset(tdata.Dataset):
         # transform only on minority classes defined by weight
         if self.transform and self.set_type == 'train' and self.meta_patch.loc[id_patch, 'weight'] > 4:
             data, target = self.transform(data, target)  # 4d tensor T x C x H x W, 2d tensor H x W
+
+        if self.set_type == 'train' and self.temporal_dropout > 0.:
+            ps = np.random.sample()
+            if ps < 0.4:
+                # remove acquisition with probability of temporal_dropout
+                probas = torch.rand(data.shape[0])
+                drop = torch.where(probas > self.temporal_dropout)[0]
+                data = data[drop]
+                dates = dates[drop]
+                if self.use_abs_rel_enc:
+                    dates2 = dates2[drop]
+            elif ps > 0.6:
+                # shorten time-series from right
+                to_idx = np.random.randint(data.shape[0] // 2, data.shape[0])
+                data = data[:to_idx]
+                dates = dates[:to_idx]
+                if self.use_abs_rel_enc:
+                    dates2 = dates2[:to_idx]
+            # there is 20% probability  than temporal drop nor shortening of ts will be performed
 
         if self.use_abs_rel_enc:
             return (data, torch.cat([dates[..., None], dates2[..., None]], axis=1)), target
