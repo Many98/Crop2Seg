@@ -4,6 +4,7 @@ import re
 from datetime import datetime
 
 import numpy as np
+import math
 
 import rasterio
 from rasterio.vrt import WarpedVRT
@@ -137,9 +138,9 @@ class Sentinel2Raster(object):
         self._count = self.__property_reader.count
         self._dtypes = self.__property_reader.dtypes
 
-    def __enter__(self):
+    def __enter__(self, bounds=None):
         if self._data is None:
-            self._data = self.__2raster()
+            self._data = self.__2raster(bounds=bounds)
             # self.__property_reader = self.data
         return self._data  # TODO make this work probably with help of MemoryFile
 
@@ -155,9 +156,9 @@ class Sentinel2Raster(object):
         self.__closed = True
         # self.data = None
 
-    def read(self, channel=None):
+    def read(self, channel=None, bounds=None):
         if self._data is None:
-            self._data = self.__2raster()
+            self._data = self.__2raster(bounds=bounds)
             # self.__property_reader = self.data
         logging.info(f'Reading {self.tile_name}_{self.date} ...')
         if isinstance(channel, list):
@@ -304,7 +305,10 @@ class Sentinel2Raster(object):
             scl = file
         return scl
 
-    def __2raster(self):
+    def __2raster(self, bounds=None):
+        """
+        bounds: list [left, bottom, right, top]
+        """
         progress_bar(j=0, count=12, prefix=f'Loading {self.tile_name}_{self.date} into memory')
         final_raster_array = []
         final_raster_profile = None
@@ -313,44 +317,51 @@ class Sentinel2Raster(object):
         if self.__is_safe():
             # read 10 m bands
             with rasterio.open(self.__dataset.subdatasets[0]) as raster_10_m:
+                w = from_bounds(*bounds, raster_10_m.transform) if bounds is not None else None
                 final_raster_profile = raster_10_m.profile
-                final_raster_array.append(raster_10_m.read())
+                final_raster_array.append(raster_10_m.read(window=w))
                 final_raster_description = final_raster_description + list(raster_10_m.descriptions)
 
             progress_bar(j=2, count=12, prefix=f'Loading {self.tile_name}_{self.date} into memory')
 
             # read 20 m bands and upsample them to 10 m resolution
             with rasterio.open(self.__dataset.subdatasets[1]) as raster_20_m:
+                w = from_bounds(*bounds, raster_20_m.transform) if bounds is not None else None
                 final_raster_array.append(raster_20_m.read([i for i in range(1, 7)], out_shape=(
                     6,
-                    int(raster_20_m.height * 2),
-                    int(raster_20_m.width * 2)
+                    int(w.height * 2 if w is not None else raster_20_m.height * 2),
+                    int(w.width * 2 if w is not None else raster_20_m.width * 2)
                 ),
-                                                           resampling=Resampling.cubic))
+                                                           resampling=Resampling.cubic,
+                                                           window=w))
                 final_raster_description = final_raster_description + list(raster_20_m.descriptions[:6])
 
             progress_bar(j=4, count=12, prefix=f'Loading {self.tile_name}_{self.date} into memory')
 
             # read 60 m bands and upsample them to 10 m resolution
             with rasterio.open(self.__dataset.subdatasets[2]) as raster_60_m:
+                w = from_bounds(*bounds, raster_60_m.transform) if bounds is not None else None
                 final_raster_array.append(raster_60_m.read([1, 2], out_shape=(
                     2,
-                    int(raster_60_m.height * 6),
-                    int(raster_60_m.width * 6)
+                    math.ceil(w.height * 6 if w is not None else raster_60_m.height * 6),
+                    math.ceil(w.width * 6 if w is not None else raster_60_m.width * 6)
                 ),
-                                                           resampling=Resampling.cubic))
+                                                           resampling=Resampling.cubic,
+                                                           window=w))
                 final_raster_description = final_raster_description + list(raster_60_m.descriptions[:2])
 
             progress_bar(j=6, count=12, prefix=f'Loading {self.tile_name}_{self.date} into memory')
 
             # read scene classification mask and upsample it to 10 m resolution (with nearest neighbours method)
             with rasterio.open(self.__dataset.subdatasets[1]) as raster_20_m:
+                w = from_bounds(*bounds, raster_20_m.transform) if bounds is not None else None
                 final_raster_array.append(raster_20_m.read(9, out_shape=(
                     1,
-                    int(raster_20_m.height * 2),
-                    int(raster_20_m.width * 2)
+                    int(w.height * 2 if w is not None else raster_20_m.height * 2),
+                    int(w.width * 2 if w is not None else raster_20_m.width * 2)
                 ),
-                                                           resampling=Resampling.nearest)[np.newaxis, :, :])
+                                                           resampling=Resampling.nearest,
+                                                           window=w)[np.newaxis, :, :])
                 final_raster_description = final_raster_description + list(raster_20_m.descriptions[8:9])
 
             progress_bar(j=8, count=12, prefix=f'Loading {self.tile_name}_{self.date} into memory')
@@ -358,7 +369,8 @@ class Sentinel2Raster(object):
             # read 10 m bands
             progress_bar(j=2, count=12, prefix=f'Loading {self.tile_name}_{self.date} into memory')
             final_raster_profile = self.__dataset.profile
-            final_raster_array.append(self.__dataset.read())
+            w = from_bounds(*bounds, self.__dataset.transform) if bounds is not None else None
+            final_raster_array.append(self.__dataset.read(window=w))
             final_raster_description = final_raster_description + list(self.__dataset.descriptions)
 
             progress_bar(j=6, count=12, prefix=f'Loading {self.tile_name}_{self.date} into memory')
@@ -366,12 +378,14 @@ class Sentinel2Raster(object):
             if self.__get_scl() is not None:
                 # read scene classification mask and upsample it to 10 m resolution (with nearest neighbours method)
                 with rasterio.open(self.__get_scl()) as scl:
+                    w = from_bounds(*bounds, scl.transform) if bounds is not None else None
                     final_raster_array.append(scl.read(1, out_shape=(
                         1,
-                        int(scl.height * 2),
-                        int(scl.width * 2)
+                        int(w.height * 2 if w is not None else scl.height * 2),
+                        int(w.width * 2 if w is not None else scl.width * 2)
                     ),
-                                                       resampling=Resampling.nearest)[np.newaxis, :, :])
+                                                       resampling=Resampling.nearest,
+                                                       window=w)[np.newaxis, :, :])
                     final_raster_description = final_raster_description + ['SCL Scene classification']
                 progress_bar(j=8, count=12, prefix=f'Loading {self.tile_name}_{self.date} into memory')
             else:
@@ -696,10 +710,6 @@ def raster_vstack(raster_up, raster_down, out_file_path='', export=False):
     return merged_mem.open(), os.path.join(out_file_path, '_merged.tif')
 
 
-def raster_hstack():
-    pass
-
-
 def raster_window(bounds, raster, to_slice=False):
     """
     Creates window object from bounds applied to raster.
@@ -720,32 +730,11 @@ def raster_window(bounds, raster, to_slice=False):
 
     return window if not to_slice else window.toslices()
 
-
-# proposals to work with sentinel1
-'''
-def sentinel_1_mosaic():
-    from rasterio.merge import merge
-    import glob
-    readers = []  # here must be rasters in 'r' mode
-    mosaic, out_trans = merge(readers)
-    # this worked better g = gdal.Warp("output.tif", ['out_up', 'out_down'], format="GTiff", options=["COMPRESS=LZW", "TILED=YES"])
-
-
-def sentinel_plot(src):
-    # plots also coordinates so it is nicer
-    from rasterio.plot import show
-    show(src.read(), transform=src.transform)
-
-
-def sentinel_transform_from_gcps():
-    import rasterio
-    src = rasterio.open("path/to/input/raster")
-    with rasterio.open("path/to/output/raster", "w", **src.profile) as dst:
-        data = src.read()
-        result = data.astype(src.profile["dtype"], casting="unsafe")
-        dst.write(result)
-        dst.transform = rasterio.transform.from_gcps(src.gcps[0])
-        dst.crs = src.gcps[1]
-'''
-
 # TODO need some fixes when working with MemoryFiles eg `raster_reproject` can have problem with filename
+
+if __name__ == '__main__':
+    r = Sentinel2Raster('')
+    print(r.bounds)
+    print(r.height)
+    print(r.width)
+    r.read(channel=2, bounds=None)
