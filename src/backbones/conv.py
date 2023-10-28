@@ -1,8 +1,6 @@
 import torch
 from torch import nn
 from torch import Tensor
-from einops.layers.torch import Rearrange, Reduce
-from einops import reduce, rearrange, repeat
 
 from src.backbones.squeeze_and_excitation import SqueezeAndExcitation
 from src.backbones.temp_shared_block import TemporallySharedBlock, TemporallySharedBlock3D
@@ -26,47 +24,6 @@ class DepthwiseSeparableConv2D(nn.Module):
         out = self.depthwise(x)
         out = self.pointwise(out)
         return out
-
-
-@experimental
-class SparseConv2d(nn.Conv2d):
-    """
-    Ineffective implementation of sparse convolution using classical "dense" convolution
-
-    Motivation is that we need to somehow forbid information leakage from unmasked image regions to masked image regions
-    caused because of use of convolution (VIT does not have such problem)
-
-    # TODO consider using MinkowskiEngine for sparse convolutions instead
-        https://nvidia.github.io/MinkowskiEngine/demo/interop.html
-    References:
-        https://github.com/facebookresearch/ConvNeXt-V2
-    # see also this https://github.com/keyu-tian/SparK
-
-    """
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        raise NotImplementedError
-        #self.register_buffer('mask', self.weight.data.clone())
-        #_, _, kH, kW = self.weight.size()
-        #self.mask.fill_(1)
-        #self.mask[:, :, kH // 2, kW // 2 + (mask_type == 'B'):] = 0
-        #self.mask[:, :, kH // 2 + 1:] = 0
-
-        # TODO we will also need to upsample masks
-        # m = torch.randint(2, (16, 16)).float()
-        # nn.Upsample(scale_factor=8)(m.unsqueeze(0).unsqueeze(0))
-
-    def forward(self, x: Tensor, *args) -> Tensor:
-        # we expect x of shape B x T x C x H x W
-        # T dim will be handled by shared encoder which rearanges into shape BT x C x H x W
-        # TODO in shared conv must be handled masking of different elements of time series
-        # TODO we will need to find out how MASK_TOKEN will look like (zeros vs random)
-        # first args[0] should be mask of shape BT x H x W which is of course composed only from 0 and 1
-        x *= args[0].unsqueeze(1)  # mask the input
-        out = super().forward(x)  # now information is leaked into masked parts
-        # TODO note that after conv there can be different H and W so args[1] needs to contain different mask
-        return out * args[1].unsqueeze(1)  # again apply mask to remove leaked information
 
 
 class ConvLayer(nn.Module):
