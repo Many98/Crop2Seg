@@ -456,9 +456,9 @@ class S2TSCZCropDataset(tdata.Dataset):
             0], f'Shape in time dimension does not match for data T={data.shape[0]} and ' \
                 f'for dates T={dates.shape[0]}. Id of patch is {id_patch}'
 
-        # transform only on minority classes defined by weight
-        if self.transform and self.set_type == 'train' and self.meta_patch.loc[id_patch, 'weight'] > 4:
-            data, target = self.transform(data, target)  # 4d tensor T x C x H x W, 2d tensor H x W
+        if self.transform and self.set_type == 'train':
+            w = self.meta_patch.loc[id_patch, 'weight']
+            data, target = self.transform(data, target, w)  # 4d tensor T x C x H x W, 2d tensor H x W
 
         if self.set_type == 'train' and self.temporal_dropout > 0.:
             ps = np.random.sample()
