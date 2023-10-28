@@ -1,12 +1,13 @@
 import collections.abc
 import re
-import random
+import numpy as np
 
 import torch
 from torch.nn import functional as F
 from torch.utils import data
 
-from torchvision.transforms.functional import hflip, vflip, rotate
+from torchvision.transforms.functional import hflip, vflip, rotate, crop
+from torchvision.transforms import RandomCrop
 
 import warnings
 
@@ -73,16 +74,19 @@ def get_ntrainparams(model):
 
 
 class Transform(torch.nn.Module):
-    def __init__(self, add_noise: bool = False):
+    def __init__(self, add_noise: bool = False, crop: bool = False, crop_size: int = 64):
         super().__init__()
 
         self.add_noise = add_noise
+        self.crop = crop
+        self.crop_size = crop_size
 
-    def __call__(self, img, mask):
-        deg = random.choice([-180, -150, -120, -90, -75, -45, -25, -10, 0, 0, 0, 0, 10, 25, 45, 75, 90, 120, 150, 180])
-        flip = random.choice([0, 1, 2])
+    def __call__(self, img, mask, weight=None):
+        deg = np.random.choice([-180, -150, -120, -90, -75, -45, -25, -10, 0, 0, 0,
+                                0, 10, 25, 45, 75, 90, 120, 150, 180], 1)
+        flip = np.random.choice([0, 1, 2], 1)
 
-        if self.add_noise and random.random() > 0.5:
+        if self.add_noise and np.random.sample() > 0.5:
             img = img + 0.01*torch.randn(img.shape)
 
         if flip == 1:
@@ -94,6 +98,15 @@ class Transform(torch.nn.Module):
 
         img = rotate(img, deg)
         mask = rotate(mask[None, :], deg)[0]
+
+        if self.crop:
+            if weight > 4:  # means lots of minority classes
+                img = crop(img, top=0, left=0, height=self.crop_size, width=self.crop_size)
+                mask = crop(mask, top=0, left=0, height=self.crop_size, width=self.crop_size)
+            else:
+
+                img = RandomCrop(size=self.crop_size, )(img)
+                mask = RandomCrop(size=self.crop_size, )(mask)
 
         return img, mask
 
