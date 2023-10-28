@@ -1,9 +1,7 @@
 import torch
 import torch.nn as nn
-from einops import repeat, rearrange
-from einops.layers.torch import Rearrange, Reduce
 
-from src.backbones.tae import TAE2d
+from src.backbones.tae import TAE2d, LTAE
 from src.backbones.temporal_aggregator import TemporalAggregator
 from src.backbones.conv import ConvBlock, UpConvBlock, DownConvBlock
 from src.backbones.utils import experimental
@@ -40,6 +38,9 @@ class TimeUNet_v1(nn.Module):
             conv_type='2d',
             add_squeeze_excit=False,
             use_abs_rel_enc=False,
+            num_queries=1,
+            use_doy=False,
+            add_linear=False,
             *args, **kwargs
     ):
         """
@@ -81,6 +82,7 @@ class TimeUNet_v1(nn.Module):
             add_squeeze_excit (bool): Whether to add squeeze and excitation. Note that is is added only to convolutional
                                       part of encoder
             use_abs_rel_enc (bool): Whether to use both date representations: Relative and absolute (DOY)
+            add_linear (bool): Whether to add linear transformation into PositionalEncoder
         """
         super().__init__()
         self.n_stages = len(encoder_widths)
@@ -97,6 +99,9 @@ class TimeUNet_v1(nn.Module):
         self.encoder = encoder
         self.conv_type = conv_type
         self.add_squeeze_excit = add_squeeze_excit
+
+        self.use_doy = False if use_abs_rel_enc else use_doy
+        self.add_linear = add_linear
 
         if encoder:
             self.return_maps = True
@@ -147,42 +152,16 @@ class TimeUNet_v1(nn.Module):
             )
             for i in range(self.n_stages - 1, 0, -1)
         )
-
-        self.temporal_encoder = TAE2d(
-            attention_type='lightweight',
-            in_channels=encoder_widths[0],  # 64
-            d_model=d_model,
-            n_head=n_head,
-            embedding_reduction=None,
-            attention_mask_reduction=None,
-            mlp=[d_model, encoder_widths[0]],
-            return_att=True,  # it will return new embeddings sequence (out) and also attention mask sequence (attn)
-            d_k=d_k,
-            use_abs_rel_enc=use_abs_rel_enc,
-            num_queries=30
-        )
-
-        self.time_conv = nn.Sequential(
-            Rearrange('b t c h w-> bhw c t'),
-            nn.Conv1d(64, 128, 5),
-            nn.Conv1d(128, 256, 5),
-            nn.GELU(),
-            nn.Conv1d(256, 256, 5),
-            nn.Conv1d(256, 256, 5),
-            nn.BatchNorm1d(256),
-            nn.GELU(),
-            nn.Conv1d(256, 256, 7),
-            nn.Conv1d(256, 128, 7),
-            nn.GELU(),
-            nn.Conv1d(128, 128, 5),
-            nn.Conv1d(128, 64, 5),
-            nn.GELU(),
-            nn.Linear(10, 1),
-            nn.GELU(),
-            nn.BatchNorm1d(64),
-            nn.Dropout1d(0.2),
-            Rearrange('bhw c t -> b c h w'),
-        )
+        self.temporal_encoder = LTAE(in_channels=encoder_widths[0],  # 64
+                                     d_model=d_model,
+                                     n_head=n_head,
+                                     d_k=d_k,
+                                     mlp=[d_model, encoder_widths[0]],
+                                     use_abs_rel_enc=use_abs_rel_enc,
+                                     num_queries=num_queries,
+                                     use_doy=use_doy,
+                                     add_linear=add_linear
+                                     )
 
         self.out_conv = ConvBlock(nkernels=[decoder_widths[0]] + out_conv, padding_mode=padding_mode,
                                   conv_type="2d", add_squeeze=False)  # [32, 32, 20]  | 20 is number of classes in PASTIS
@@ -199,8 +178,6 @@ class TimeUNet_v1(nn.Module):
         out, att = self.temporal_encoder(
             out_, batch_positions=batch_positions, pad_mask=pad_mask
         )
-
-        out = self.time_conv(out)
 
         feature_maps = [out]
         # out shape is B x C x H x W
