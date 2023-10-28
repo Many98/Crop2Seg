@@ -1,17 +1,14 @@
 import torch
 import torch.nn as nn
-import einops
 import torch.nn.functional as F
 from einops import rearrange
-
-from src.backbones.utils import experimental
 
 
 class PositionalEncoder(nn.Module):
     """
     Original implementation of positional encoder used in UTAE
     """
-    def __init__(self, d_model, T=1000, repeat=None, offset=0):
+    def __init__(self, d_model, T=1000, repeat=None, offset=0, add_linear=False):
         super().__init__()
         self.d = d_model
         self.T = T
@@ -20,6 +17,10 @@ class PositionalEncoder(nn.Module):
             T, 2 * (torch.arange(offset, offset + d_model).float() // 2) / d_model
         )
         self.updated_location = False
+        self.add_linear = add_linear
+
+        if add_linear:
+            self.fc = nn.Linear(d_model * repeat, d_model * repeat) if repeat is not None else nn.Linear(d_model, d_model)
 
     def forward(self, batch_positions):
         if not self.updated_location:
@@ -35,8 +36,11 @@ class PositionalEncoder(nn.Module):
             sinusoid_table = torch.cat(
                 [sinusoid_table for _ in range(self.repeat)], dim=-1
             )
-
-        return sinusoid_table  # B x T x d_model  where B = b*h*w
+        if self.add_linear:
+            pos_emb = self.fc(sinusoid_table)
+            return pos_emb  # B x T x d_model  where B = b*h*w
+        else:
+            return sinusoid_table  # B x T x d_model  where B = b*h*w
 
 
 class AbsolutePositionalEncoder(nn.Module):
@@ -53,11 +57,10 @@ class AbsolutePositionalEncoder(nn.Module):
 
     def forward(self, batch_positions):
         # here we expect batch_position to provide info about day of year
-        #  TODO probably we should consider year with 366 days but whatever
         #  input shape B x T
         b, t = batch_positions.size()
         bp = rearrange(batch_positions, 'b t -> (b t)')
-        bp = F.one_hot(bp.to(torch.int64), num_classes=365).to(torch.float32)  # output shape B x T x 365
+        bp = F.one_hot(bp.to(torch.int64), num_classes=365).to(torch.float32)  # output shape (B*T) x 365
         bp = rearrange(bp, '(b t) x-> b t x', b=b, t=t)
 
         pos_emb = self.fc(bp)
@@ -68,32 +71,3 @@ class AbsolutePositionalEncoder(nn.Module):
             )
 
         return pos_emb  # B x T x d_model
-
-
-@experimental
-class LearnedPositionalEncoder(nn.Module):
-    """
-    Alternative implementation of positional encoder where positional embeddings
-    are learned rather than predefined.
-
-    Notes:
-        This implementation was not tested properly yet and is experimental
-    """
-    def __init__(self, d_model: int, T: int = 100, repeat=None):
-        """
-        d_model: dimension of embeddings
-        T: maximal length of sequence to be learned
-        """
-        super().__init__()
-
-        self.d = d_model
-        self.T = T
-        self.repeat = repeat
-
-        # TODO check dmensions
-        self.positional_encodings = nn.Parameter(torch.zeros(1, T, d_model), requires_grad=True)
-
-    def forward(self, x: torch.Tensor):
-        pe = self.positional_encodings[:, :x.shape[1], :]
-
-        return x + einops.repeat(pe, 't d_model -> new_dim t d_model', new_dim=x.shape[0])
