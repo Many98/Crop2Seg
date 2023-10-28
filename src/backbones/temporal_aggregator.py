@@ -42,18 +42,18 @@ class TemporalAggregator(nn.Module):
                 # out = torch.gather(out, 2, attn.argmax(2, keepdim=True)).squeeze(2)  # hxBxC/hxHxW
 
                 out = torch.cat([group for group in out], dim=1)  # -> BxCxHxW
-                return out, None
+                return out
 
             elif self.mode == "att_mean":  # This is Mean attention method (see paper)
                 attn = attn_mask.mean(dim=0)  # average over heads -> BxTxHxW
                 attn = up(attn)
                 attn = attn * (~pad_mask).float()[:, :, None, None]
                 out = (x * attn[:, :, None, :, :]).sum(dim=1)
-                return out, None
+                return out
             elif self.mode == "mean":  # This is Skip mean method simply calculate temporal mean to aggregate input feature maps
                 out = x * (~pad_mask).float()[:, :, None, None, None]
                 out = out.sum(dim=1) / (~pad_mask).sum(dim=1)[:, None, None, None]
-                return out, None
+                return out
         else:
             if self.mode == "att_group":
                 n_heads, b, t, h, w = attn_mask.shape
@@ -67,14 +67,14 @@ class TemporalAggregator(nn.Module):
                 out = attn[:, :, :, None, :, :] * out
                 out = out.sum(dim=2)  # sum on temporal dim -> hxBxC/hxHxW
                 out = torch.cat([group for group in out], dim=1)  # -> BxCxHxW
-                return out, None
+                return out
             elif self.mode == "att_mean":
                 attn = attn_mask.mean(dim=0)  # average over heads -> BxTxHxW
                 attn = up(attn)
                 out = (x * attn[:, :, None, :, :]).sum(dim=1)
-                return out, None
+                return out
             elif self.mode == "mean":
-                return x.mean(dim=1), None
+                return x.mean(dim=1)
 
 
 class TemporalAggregator3D(nn.Module):
@@ -98,7 +98,6 @@ class TemporalAggregator3D(nn.Module):
             # nn.ReLU(),
             nn.Conv3d(in_channels=1, out_channels=1, kernel_size=3, padding=1),
             nn.Softmax(2)
-            # TODO we can use one "shared" 3D temporal_agregator3d or 3 temporal aggregators
         )
 
     def forward(self, x: Tensor, pad_mask: None or Tensor = None, attn_mask: None or Tensor = None) -> (Tensor, Tensor):
