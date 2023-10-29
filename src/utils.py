@@ -7,9 +7,6 @@ from torch.nn import functional as F
 from torch.utils import data
 
 from torchvision.transforms.functional import hflip, vflip, rotate, crop
-from torchvision.transforms import RandomCrop
-
-import warnings
 
 np_str_obj_array_pattern = re.compile(r"[SaUO]")
 
@@ -81,10 +78,10 @@ class Transform(torch.nn.Module):
         self.crop = crop
         self.crop_size = crop_size
 
-    def __call__(self, img, mask, weight=None):
-        deg = np.random.choice([-180, -150, -120, -90, -75, -45, -25, -10, 0, 0, 0,
-                                0, 10, 25, 45, 75, 90, 120, 150, 180], 1)
-        flip = np.random.choice([0, 1, 2], 1)
+    def __call__(self, img, mask):
+        deg = int(np.random.choice([-180, -150, -120, -90, -75, -45, -25, -10, 0, 0, 0,
+                                0, 10, 25, 45, 75, 90, 120, 150, 180], 1)[0])
+        flip = int(np.random.choice([0, 1, 2], 1)[0])
 
         if self.add_noise and np.random.sample() > 0.5:
             img = img + 0.01*torch.randn(img.shape)
@@ -100,13 +97,9 @@ class Transform(torch.nn.Module):
         mask = rotate(mask[None, :], deg)[0]
 
         if self.crop:
-            if weight > 4:  # means lots of minority classes
-                img = crop(img, top=0, left=0, height=self.crop_size, width=self.crop_size)
-                mask = crop(mask, top=0, left=0, height=self.crop_size, width=self.crop_size)
-            else:
-
-                img = RandomCrop(size=self.crop_size, )(img)
-                mask = RandomCrop(size=self.crop_size, )(mask)
+            xy = torch.randint(0, 64, (2, ))
+            img = crop(img, top=xy[1], left=xy[0], height=self.crop_size, width=self.crop_size)
+            mask = crop(mask, top=xy[1], left=xy[0], height=self.crop_size, width=self.crop_size)
 
         return img, mask
 
