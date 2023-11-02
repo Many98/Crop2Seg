@@ -12,6 +12,8 @@ import numpy as np
 import rasterio
 import geopandas as gpd
 from rasterio import features
+from rasterio.coords import BoundingBox
+from rasterio.transform import Affine
 
 from shapely.geometry import box as shapely_box
 
@@ -403,13 +405,18 @@ class DatasetCreator(object):
 
         rasters = [Sentinel2Raster(os.path.join(self.tiles_path, f)) for f in file_names]
 
-        bbox = rasters[0].bounds
+        if bounds is not None:
+            bbox = BoundingBox(*bounds)
+            t = rasters[0].transform
+            affine = Affine(a=t.a, b=t.b, c=bbox.left, d=t.d, e=t.e, f=bbox.top)
+        else:
+            bbox = rasters[0].bounds
+            affine = rasters[0].transform
         crs = rasters[0].crs.to_epsg()
 
         # check whether CRS is UTM33N (epsg=32633)
         assert crs == 32633 and rasters[0].crs.to_epsg() == rasters[-1].crs.to_epsg(), 'Expected UTM33N crs'
 
-        affine = rasters[0].transform
         dates = [r.date for r in rasters]
 
         logging.getLogger().disabled = True
