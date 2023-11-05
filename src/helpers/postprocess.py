@@ -16,16 +16,29 @@ from src.helpers.sentinel2raster import export_to_tif
 
 
 @export_to_tif
-def prediction2raster(prediction: np.ndarray, crs: str, affine: list, export: bool = False,
+def prediction2raster(prediction: np.ndarray, epsg: str, affine: list, export: bool = False,
                       export_dir: str = '', export_name: str = '') -> (
         Tuple)[Union[rasterio.io.DatasetReader, rasterio.io.MemoryFile], str]:
     """
-    exports prediction (top 1 labels) and probabilities to raster
+    Exports prediction (top 1 labels) and probabilities to raster
 
-    prediction: array of shape [NUM CLASSES, HEIGHT, WIDTH] with class probabilities
-    crs: crs of output raster
-    affine: affine transform of raster
-    export: whether to export to tif
+    Parameters
+    ----------
+    prediction: np.ndarray
+         array of shape [NUM CLASSES, HEIGHT, WIDTH] with class probabilities
+    epsg: str
+        epsg code of raster
+    affine: list
+        affine transform of raster
+    export: bool
+        Whether to export raster to tif
+    export_name: str
+        optional name of exported raster
+    export_dir: str
+        optional directory of exported raster
+    Returns
+    -------
+    gpd.GeoDataFrame
     """
 
     assert prediction.ndim == 3, 'Prediction array is expected to be 3 dimensional vector of soft predictions'
@@ -33,7 +46,7 @@ def prediction2raster(prediction: np.ndarray, crs: str, affine: list, export: bo
 
     profile = {'driver': 'GTiff', 'dtype': rasterio.float32, 'nodata': 0.0, 'width': prediction.shape[1],
                'height': prediction.shape[2], 'count': prediction.shape[0] + 1,
-               'crs': rasterio.crs.CRS.from_epsg(crs),
+               'crs': rasterio.crs.CRS.from_epsg(epsg),
                'transform': rasterio.Affine(affine[0][0], affine[1][0], affine[2][0],
                                             affine[0][1], affine[1][1], affine[2][1]),
                'blockxsize': 128,
@@ -57,12 +70,20 @@ def prediction2raster(prediction: np.ndarray, crs: str, affine: list, export: bo
 
 def prediction2polygon_layer(prediction: np.ndarray, affine: list, epsg: str = 'epsg:32633') -> gpd.GeoDataFrame:
     """
-    exports prediction (top 1 labels) to polygon layer (GeoDataFrame)
+    Exports prediction (top 1 labels) to polygon layer (GeoDataFrame)
 
-    prediction: array of shape [NUM CLASSES, HEIGHT, WIDTH] with class probabilities
+    Parameters
+    ----------
+    prediction: np.ndarray
+        array of shape [NUM CLASSES, HEIGHT, WIDTH] with class probabilities
                 or [HEIGHT, WIDTH] with proper top 1 labels
-    epsg: epsg of polygon layer
-    affine: affine transform of raster
+    epsg: str
+        epsg code of polygon layer
+    affine: list
+        affine transform of raster
+    Returns
+    -------
+    gpd.GeoDataFrame
     """
     if prediction.ndim == 2:
         hard_pred = prediction.astype(np.uint8)
@@ -84,16 +105,23 @@ def prediction2polygon_layer(prediction: np.ndarray, affine: list, epsg: str = '
     return gdf
 
 
-def raster2polygon_layer(raster_path: Union[str, rasterio.io.MemoryFile, rasterio.io.DatasetReader]):
+def raster2polygon_layer(raster: Union[str, rasterio.io.MemoryFile, rasterio.io.DatasetReader]) -> gpd.GeoDataFrame:
     """
-    converts (predicted) raster to polygon vector layer (geodataframe)
-    only first hard labels are used
+    Converts (predicted) raster to polygon vector layer (geodataframe)
+    only hard labels are used
+
+    Parameters
+    ----------
+    raster: str or rasterio.io.MemoryFile or rasterio.io.DatasetReader
+    Returns
+    -------
+    gpd.GeoDataFrame
     """
-    if isinstance(raster_path, rasterio.io.MemoryFile) or isinstance(raster_path, rasterio.io.DatasetReader):
-        ff = raster_path.files[0]
-        raster_path.close()
-    elif isinstance(raster_path, str):
-        ff = raster_path
+    if isinstance(raster, rasterio.io.MemoryFile) or isinstance(raster, rasterio.io.DatasetReader):
+        ff = raster.files[0]
+        raster.close()
+    elif isinstance(raster, str):
+        ff = raster
     else:
         raise Exception('Unsupported type of input raster_path')
     r = rasterio.open(ff)
@@ -115,15 +143,23 @@ def raster2polygon_layer(raster_path: Union[str, rasterio.io.MemoryFile, rasteri
     return gdf
 
 
-def raster2point_layer(raster_path: Union[str, rasterio.io.MemoryFile]):
+def raster2point_layer(raster: Union[str, rasterio.io.MemoryFile, rasterio.io.DatasetReader]) -> gpd.GeoDataFrame:
     """
-    converts (predicted) raster to point vector layer (geodataframe)
+    Converts (predicted) raster to point vector layer (geodataframe)
+    only hard labels are used
+
+    Parameters
+    ----------
+    raster: str or rasterio.io.MemoryFile or rasterio.io.DatasetReader
+    Returns
+    -------
+    gpd.GeoDataFrame
     """
-    if isinstance(raster_path, rasterio.io.MemoryFile) or isinstance(raster_path, rasterio.io.DatasetReader):
-        rds = rioxarray.open_rasterio(raster_path.files[0])
-        raster_path.close()
-    elif isinstance(raster_path, str):
-        rds = rioxarray.open_rasterio(raster_path)
+    if isinstance(raster, rasterio.io.MemoryFile) or isinstance(raster, rasterio.io.DatasetReader):
+        rds = rioxarray.open_rasterio(raster.files[0])
+        raster.close()
+    elif isinstance(raster, str):
+        rds = rioxarray.open_rasterio(raster)
     else:
         raise Exception('Unsupported type of input raster_path')
 
@@ -133,10 +169,24 @@ def raster2point_layer(raster_path: Union[str, rasterio.io.MemoryFile]):
     return gpd.GeoDataFrame(df, crs=rds.rio.crs, geometry=geometry)
 
 
-def homogenize(prediction: Union[str, rasterio.io.MemoryFile, rasterio.io.DatasetReader], vector_data_path: str,
-               affine: list, epsg: str = 'epsg:32633'):
+def homogenize(prediction: Union[str, rasterio.io.MemoryFile, rasterio.io.DatasetReader, np.ndarray],
+               vector_data_path: str, affine: list, epsg: str = 'epsg:32633') -> gpd.GeoDataFrame:
     """
-    homogenize (polygonize) prediction on external data vector data (LPIS)
+    Homogenize (polygonize) prediction using external vector data (LPIS)
+
+    Parameters
+    ----------
+    prediction: str or rasterio.io.MemoryFile or rasterio.io.DatasetReader or np.ndarray
+    vector_data_path: str
+        Absolute path to vector data (shapefile) used for homogenization
+    epsg: str
+        epsg code of polygon layer
+    affine: list
+        affine transform of raster
+
+    Returns
+    -------
+    gpd.GeoDataFrame
     """
     if isinstance(prediction, rasterio.io.MemoryFile) or isinstance(prediction, rasterio.io.DatasetReader):
         bbox = prediction.bounds
@@ -196,10 +246,24 @@ def homogenize(prediction: Union[str, rasterio.io.MemoryFile, rasterio.io.Datase
     return tt[['geometry', 'raster_val']]
 
 
-def homogenize_boundaries(prediction: np.ndarray, affine: list, epsg: str = 'epsg:32633', boundary_code: int = 15):
+def homogenize_boundaries(prediction: np.ndarray, affine: list,
+                          epsg: str = 'epsg:32633', boundary_code: int = 15) -> gpd.GeoDataFrame:
     """
-    auxiliary function to polygonize predictions based on boundary predictions
+    Auxiliary function for homogenization of predictions based on boundary predictions
     Note that currently function is not very robust and expects that boundary is encoded as `15`
+
+    Parameters
+    ----------
+    prediction: np.ndarray
+    epsg: str
+        epsg code of polygon layer
+    affine: list
+        affine transform of raster
+    boundary_code: int
+        integer label encoding boundary class (Default is 15)
+    Returns
+    -------
+    gpd.GeoDataFrame
     """
     element = np.ones((3, 3))
     element[0, 0] = 0
