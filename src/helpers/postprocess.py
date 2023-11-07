@@ -8,11 +8,13 @@ import rasterio
 from rasterio.features import shapes
 from rasterio.coords import BoundingBox
 from shapely.geometry import box as shapely_box
+from shapely import Point
 
 import os
 from typing import Tuple, Union
 
 from src.helpers.sentinel2raster import export_to_tif
+from src.datasets.s2_ts_cz_crop import S2TSCZCropDataset
 
 
 @export_to_tif
@@ -26,6 +28,7 @@ def prediction2raster(prediction: np.ndarray, epsg: str, affine: list, export: b
     ----------
     prediction: np.ndarray
          array of shape [NUM CLASSES, HEIGHT, WIDTH] with class probabilities
+                or [HEIGHT, WIDTH] with proper top 1 labels
     epsg: str
         epsg code of raster
     affine: list
@@ -41,20 +44,31 @@ def prediction2raster(prediction: np.ndarray, epsg: str, affine: list, export: b
     gpd.GeoDataFrame
     """
 
-    assert prediction.ndim == 3, 'Prediction array is expected to be 3 dimensional vector of soft predictions'
     assert prediction.max() <= 1., 'Prediction array is expected to be 3 dimensional vector of soft predictions'
 
-    profile = {'driver': 'GTiff', 'dtype': rasterio.float32, 'nodata': 0.0, 'width': prediction.shape[1],
-               'height': prediction.shape[2], 'count': prediction.shape[0] + 1,
+    if prediction.ndim == 2:
+        prediction = prediction.astype(np.uint8)
+        count = 1
+        h = prediction.shape[1]
+        w = prediction.shape[0]
+        dtype = rasterio.uint8
+    elif prediction.ndim == 3:
+        hard_pred = np.argmax(prediction, axis=0).astype('float32')
+        prediction = np.vstack([hard_pred[None, ...], prediction])
+        count = prediction.shape[0]
+        h = prediction.shape[2]
+        w = prediction.shape[1]
+        dtype = rasterio.float32
+    else:
+        raise Exception(f'Prediction array must 2 or 3 dimensional')
+
+    profile = {'driver': 'GTiff', 'dtype': dtype, 'nodata': 0.0, 'width': w,
+               'height': h, 'count': count,
                'crs': rasterio.crs.CRS.from_epsg(epsg),
                'transform': rasterio.Affine(affine[0][0], affine[1][0], affine[2][0],
                                             affine[0][1], affine[1][1], affine[2][1]),
                'blockxsize': 128,
                'blockysize': 128, 'tiled': True, 'compress': 'lzw'}
-
-    hard_pred = np.argmax(prediction, axis=0).astype('float32')
-
-    prediction = np.vstack([hard_pred[None, ...], prediction])
 
     # TODO MemoryFile does not empties /vsim/... -> stop using it ... use just plain np.array accessed via read method
     #  use NamedTemporaryFile instead https://rasterio.readthedocs.io/en/stable/topics/memory-files.html
@@ -99,6 +113,58 @@ def prediction2polygon_layer(prediction: np.ndarray, affine: list, epsg: str = '
         {'properties': {'raster_val': v}, 'geometry': s}
         for j, (s, v)
         in enumerate(shapes(hard_pred, mask=None, transform=transform)))
+
+    gdf = gpd.GeoDataFrame.from_features(list(results), crs=epsg)
+
+    return gdf
+
+
+def prediction2point_layer(prediction: np.ndarray, affine: list, epsg: str = 'epsg:32633') -> gpd.GeoDataFrame:
+    """
+    Exports prediction (top 1 labels) to point layer (GeoDataFrame)
+
+    Parameters
+    ----------
+    prediction: np.ndarray
+        array of shape [NUM CLASSES, HEIGHT, WIDTH] with class probabilities
+                or [HEIGHT, WIDTH] with proper top 1 labels
+    epsg: str
+        epsg code of polygon layer
+    affine: list
+        affine transform of raster
+    Returns
+    -------
+    gpd.GeoDataFrame
+    """
+    if prediction.ndim == 2:
+        prediction = prediction.astype(np.uint8)
+    elif prediction.ndim == 3:
+        hard_pred = np.argmax(prediction, axis=0).astype('float32')
+        prediction = np.vstack([hard_pred[None, ...], prediction])
+    else:
+        raise Exception(f'Prediction array must 2 or 3 dimensional')
+
+    cols, rows = np.meshgrid(np.arange(prediction.shape[-2]), np.arange(prediction.shape[-1]))
+    transform = rasterio.Affine(affine[0][0], affine[1][0], affine[2][0],
+                                affine[0][1], affine[1][1], affine[2][1])
+
+    xs, ys = rasterio.transform.xy(transform, rows, cols)
+
+    xcoords = np.array(xs)
+    ycoords = np.array(ys)
+
+    if prediction.ndim == 2:
+        results = (
+            {'properties': {str(k): v for k, v in enumerate(prediction[:, c, r])},
+             'geometry': Point(xcoords[0, c], ycoords[r, 0])}
+            for c in range(prediction.shape[-1]) for r in range(prediction.shape[-2])
+        )
+    else:
+        results = (
+            {'properties': {'raster_val': prediction[c, r]},
+             'geometry': Point(xcoords[0, c], ycoords[r, 0])}
+            for c in range(prediction.shape[-1]) for r in range(prediction.shape[-2])
+        )
 
     gdf = gpd.GeoDataFrame.from_features(list(results), crs=epsg)
 
@@ -170,23 +236,27 @@ def raster2point_layer(raster: Union[str, rasterio.io.MemoryFile, rasterio.io.Da
 
 
 def homogenize(prediction: Union[str, rasterio.io.MemoryFile, rasterio.io.DatasetReader, np.ndarray],
-               vector_data_path: str, affine: list, epsg: str = 'epsg:32633') -> gpd.GeoDataFrame:
+               vector_data_path: str, affine: list, epsg: str = 'epsg:32633',
+               array_out: bool = False) -> Union[gpd.GeoDataFrame, np.ndarray]:
     """
     Homogenize (polygonize) prediction using external vector data (LPIS)
 
     Parameters
     ----------
     prediction: str or rasterio.io.MemoryFile or rasterio.io.DatasetReader or np.ndarray
+                array of shape [NUM CLASSES, HEIGHT, WIDTH] with class probabilities
+                or [HEIGHT, WIDTH] with proper top 1 labels
     vector_data_path: str
         Absolute path to vector data (shapefile) used for homogenization
     epsg: str
         epsg code of polygon layer
     affine: list
         affine transform of raster
-
+    array_out: bool
+        Whether to export homogenized prediction as numpy array
     Returns
     -------
-    gpd.GeoDataFrame
+    gpd.GeoDataFrame or np.ndarray
     """
     if isinstance(prediction, rasterio.io.MemoryFile) or isinstance(prediction, rasterio.io.DatasetReader):
         bbox = prediction.bounds
@@ -207,6 +277,9 @@ def homogenize(prediction: Union[str, rasterio.io.MemoryFile, rasterio.io.Datase
         gdf = prediction2polygon_layer(prediction, affine, epsg)
         bb = gdf.total_bounds
         bbox = BoundingBox(*list(bb))
+        shape = prediction.shape[-2:]
+        transform = rasterio.Affine(affine[0][0], affine[1][0], affine[2][0],
+                                    affine[0][1], affine[1][1], affine[2][1])
     else:
         raise Exception('Unsupported type of input prediction')
 
@@ -228,26 +301,28 @@ def homogenize(prediction: Union[str, rasterio.io.MemoryFile, rasterio.io.Datase
     uu = gg[['area', 'index', 'geometry']].merge(merged[['area', 'raster_val']], on='area', how='inner')
     tt = gpd.GeoDataFrame(uu)
 
-    # TODO enrich it with other per polygons stats like probability etc
-    '''
-    shapes_ = tt[['geometry', 'raster_val']].values.tolist()
+    if array_out:
+        shapes_ = tt[['geometry', 'raster_val']].values.tolist()
 
-    out = rasterio.features.rasterize(shapes_,
-                                      out_shape=shape,
-                                      fill=0,  # fill value for background
-                                      out=None,
-                                      transform=affine,
-                                      all_touched=False,
-                                      # merge_alg=MergeAlg.replace,  # ... used is default
-                                      default_value=1,
-                                      dtype=rasterio.uint8
-                                      )
-    '''
-    return tt[['geometry', 'raster_val']]
+        out = rasterio.features.rasterize(shapes_,
+                                          out_shape=shape,
+                                          fill=0,  # fill value for background
+                                          out=None,
+                                          transform=transform,
+                                          all_touched=False,
+                                          # merge_alg=MergeAlg.replace,  # ... used is default
+                                          default_value=1,
+                                          dtype=rasterio.uint8
+                                          )
+
+        return out
+    else:
+        return tt[['geometry', 'raster_val']]
 
 
 def homogenize_boundaries(prediction: np.ndarray, affine: list,
-                          epsg: str = 'epsg:32633', boundary_code: int = 15) -> gpd.GeoDataFrame:
+                          epsg: str = 'epsg:32633', boundary_code: int = 15,
+                          array_out: bool = False) -> Union[gpd.GeoDataFrame, np.ndarray]:
     """
     Auxiliary function for homogenization of predictions based on boundary predictions
     Note that currently function is not very robust and expects that boundary is encoded as `15`
@@ -261,9 +336,11 @@ def homogenize_boundaries(prediction: np.ndarray, affine: list,
         affine transform of raster
     boundary_code: int
         integer label encoding boundary class (Default is 15)
+    array_out: bool
+        Whether to export homogenized prediction as numpy array
     Returns
     -------
-    gpd.GeoDataFrame
+    gpd.GeoDataFrame or np.ndarray
     """
     element = np.ones((3, 3))
     element[0, 0] = 0
@@ -283,7 +360,8 @@ def homogenize_boundaries(prediction: np.ndarray, affine: list,
     # super = np.where((pred_1_b == boundary_code) | ((pred_2_b == boundary_code) & (proba_2_b > 0.3)), 0, 1)
     # TODO we should probably perform opening https://docs.opencv.org/4.x/d9/d61/tutorial_py_morphological_ops.html
     #  to remove pixels blocking
-    super = np.where((pred_t1 == boundary_code) | ((pred_t2 == boundary_code) & (proba_t2 > 0.3)) | (pred_t1 == 0), 0, 1)
+    super = np.where((pred_t1 == boundary_code) | ((pred_t2 == boundary_code) & (proba_t2 > 0.3)) | (pred_t1 == 0), 0,
+                     1)
     altered = np.where((pred_t1 == boundary_code), pred_t2, pred_t1)
 
     labeled, ncomp = label(super, element)
@@ -298,7 +376,7 @@ def homogenize_boundaries(prediction: np.ndarray, affine: list,
 
     extracted_shapes = extracted_shapes[extracted_shapes.raster_val != 0]
 
-    #extracted_shapes.plot()
+    # extracted_shapes.plot()
     '''
     plt.xlim(extracted_shapes.bounds.min().loc['minx'], extracted_shapes.bounds.max().loc['maxx'])
     plt.ylim(extracted_shapes.bounds.min().loc['miny'], extracted_shapes.bounds.max().loc['maxy'])
@@ -319,20 +397,21 @@ def homogenize_boundaries(prediction: np.ndarray, affine: list,
                                                  how='inner')
     tt = gpd.GeoDataFrame(uu)
 
-    '''
-    # shapes_ = merged2[['geometry', 'value']].values.tolist()
-    shapes_ = tt[['geometry', 'raster_val']].values.tolist()
+    if array_out:
+        shapes_ = tt[['geometry', 'raster_val']].values.tolist()
+        transform = rasterio.Affine(affine[0][0], affine[1][0], affine[2][0],
+                                    affine[0][1], affine[1][1], affine[2][1])
+        out = rasterio.features.rasterize(shapes_,
+                                          out_shape=pred_t1.shape,
+                                          fill=0,  # fill value for background
+                                          out=None,
+                                          transform=transform,
+                                          all_touched=False,
+                                          # merge_alg=MergeAlg.replace,  # ... used is default
+                                          default_value=1,
+                                          dtype=rasterio.uint8
+                                          )
 
-    out = rasterio.features.rasterize(shapes_,
-                                      out_shape=pred_1_b.shape,
-                                      fill=0,  # fill value for background
-                                      out=None,
-                                      transform=transform,
-                                      all_touched=False,
-                                      # merge_alg=MergeAlg.replace,  # ... used is default
-                                      default_value=1,
-                                      dtype=rasterio.uint8
-                                      )
-    '''
-
-    return tt[['geometry', 'raster_val']]
+        return out
+    else:
+        return tt[['geometry', 'raster_val']]
