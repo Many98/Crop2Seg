@@ -149,7 +149,7 @@ optional arguments:
 ```
 
 ### Script crop2seg.py
- Main script for web application (see Demo below)
+ Main script for web application
  
  To run web app on localhost use: 
 ```bash
