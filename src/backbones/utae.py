@@ -44,6 +44,7 @@ class UTAE(nn.Module):
             num_queries=1,
             use_doy=False,
             add_linear=False,
+            add_boundary_loss=False,
             *args, **kwargs
     ):
         """
@@ -86,8 +87,11 @@ class UTAE(nn.Module):
             add_squeeze_excit (bool): Whether to add squeeze and excitation. Note that is is added only to convolutional
                                       part of encoder
             use_abs_rel_enc (bool): Whether to use both date representations: Relative and absolute (DOY)
+            use_doy: (bool): Whether to use DOY instead of difference from ref. date positional encoding
             num_queries (int): Number of learnable query vectors which are at the end averaged
             add_linear (bool): Whether to add linear transformation in PositionalEncoder
+            add_boundary_loss (bool): Whether to simultaneously return boundary prediction
+
         """
         super().__init__()
         self.n_stages = len(encoder_widths)
@@ -106,6 +110,7 @@ class UTAE(nn.Module):
 
         self.use_doy = False if use_abs_rel_enc else use_doy
         self.add_linear = add_linear
+        self.add_boundary_loss = add_boundary_loss
 
         self.use_mbconv = use_mbconv
         self.add_squeeze_excit = add_squeeze_excit
@@ -187,6 +192,11 @@ class UTAE(nn.Module):
                                        conv_type="2d",
                                        add_squeeze=False)  # [32, 32, 20]  | 20 is number of classes in PASTIS
 
+        if add_boundary_loss:
+            self.boundary_conv = out_conv_block(nkernels=[decoder_widths[0]] + [32, 2], padding_mode=padding_mode,
+                                                conv_type="2d",
+                                                add_squeeze=False)
+
     def forward(self, input, batch_positions=None, return_att=False, *args, **kwargs):
         pad_mask = (
             (input == self.pad_value).all(dim=-1).all(dim=-1).all(dim=-1)
@@ -223,10 +233,20 @@ class UTAE(nn.Module):
         if self.encoder:
             return out, maps
         else:
-            out = self.out_conv(out)
-            if return_att:
-                return out, att
-            if self.return_maps:
-                return out, maps
+            if self.add_boundary_loss:
+                out_ = self.out_conv(out)
+                out_b = self.boundary_conv(out)
+                if return_att:
+                    return out_, out_b, att
+                if self.return_maps:
+                    return out_, out_b, maps
+                else:
+                    return out_, out_b
             else:
-                return out
+                out = self.out_conv(out)
+                if return_att:
+                    return out, att
+                if self.return_maps:
+                    return out, maps
+                else:
+                    return out
