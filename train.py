@@ -16,9 +16,7 @@ from src.datasets.s2_ts_cz_crop import S2TSCZCropDataset
 from src.datasets.pastis import PASTISDataset
 from src.learning.weight_init import weight_init
 from src.learning.smooth_loss import SmoothCrossEntropy2D
-from src.learning.recall_loss import RecallCrossEntropy
-from src.learning.utils import iterate, overall_performance, save_results, prepare_output, checkpoint, get_model, \
-    iterate_pretrain
+from src.learning.utils import iterate, overall_performance, save_results, prepare_output, checkpoint, get_model
 
 parser = argparse.ArgumentParser()
 # Model parameters
@@ -46,7 +44,14 @@ parser.add_argument("--num_queries", default=1, type=int, help="Number of learna
                                                                "averaged.")
 parser.add_argument("--temporal_dropout", default=0., type=float,
                     help="Probability of removing acquisition from time-series")
-parser.add_argument("--pretrain", default=False, type=bool, help="Whether to use pretrining dataset")
+parser.add_argument("--augment", action='store_true',
+                    help="Whether to perform augmentation of S2TSCZCrop Dataset")
+parser.add_argument("--add_linear", action='store_true',
+                    help="Whether to add linear transform to positional encoder")
+parser.add_argument("--add_boundary", action='store_true',
+                    help="Whether to add boundary loss. i.e. model will segment crops and boundary")
+parser.add_argument("--get_affine", action='store_true',
+                    help="Whether to return also affine transform")
 
 parser.add_argument(
     "--dataset",
@@ -226,6 +231,8 @@ def main(config):
         weight_folder = config.weight_folder
         num_epochs = config.epochs
         test_region = config.test_region
+        batch_size = config.batch_size
+        lr = config.lr
 
         if not finetuning:
             logging.info(f"LOADING STATE JSON FROM {os.path.join(config.weight_folder, 'conf.json')}")
@@ -233,6 +240,8 @@ def main(config):
                 config = json.load(f)
                 config.update({"weight_folder": weight_folder})
                 config.update({"test_region": test_region})
+                config.update({"batch_size": batch_size})
+                config.update({"lr": lr})
 
         if not is_test_run and not finetuning:
             logging.info("RESUMING TRAINING...")
@@ -243,7 +252,7 @@ def main(config):
                 trainlog = {}
 
             start_epoch = state["epoch"] + 1
-            best_mIoU = state.get("best_mIoU", 0)  # TODO adjust for pretraining
+            best_mIoU = state.get("best_mIoU", 0)
             optimizer_state_resume = state["optimizer"]
             config.update({"epochs": num_epochs})
 
@@ -290,7 +299,7 @@ def main(config):
         add_ndvi=config.add_ndvi,
         use_abs_rel_enc=config.use_abs_rel_enc,
         temporal_dropout=config.temporal_dropout,
-        pretrain=config.pretrain
+        get_affine=config.get_affine
     )
 
     if config.add_ndvi:
@@ -301,7 +310,10 @@ def main(config):
     train_folds, val_fold, test_fold = fold_sequence
 
     if not is_test_run:
-        transform = None  # Transform(add_noise=True)
+        if config.augment:
+            transform = Transform(add_noise=False, crop=False, crop_size=64)
+        else:
+            transform = None
 
         if config.dataset.lower() == 'pastis':
             dt_train = PASTISDataset(**dt_args, folds=train_folds,
@@ -365,9 +377,6 @@ def main(config):
             f"Test: {len(dt_test)} samples"
         )
 
-    if config.pretrain:
-        config.out_conv = [config.out_conv[0], config.input_dim]
-
     # Model definition
     model = get_model(config)
 
@@ -391,52 +400,6 @@ def main(config):
             p.requires_grad = True
         '''
 
-        layers_to_remove = []
-        for k in state_dict:
-            if "out_conv" in k:  # or "in_conv" in k or "spatial_red" in k
-                layers_to_remove.append(k)
-
-        for key in layers_to_remove:
-            del state_dict[key]
-
-        model.out_conv.conv.conv[3] = nn.Conv2d(32, config.num_classes, kernel_size=(3, 3), stride=(1, 1),
-                                                padding=(1, 1), padding_mode='reflect')
-        model.out_conv.conv.conv[4] = nn.BatchNorm2d(config.num_classes, eps=1e-05, momentum=0.1, affine=True,
-                                                     track_running_stats=True)
-
-        model.apply(weight_init)
-        model_dict = model.state_dict()
-
-        non_pretrained_dict = {k: v for k, v in model_dict.items() if "out_conv" in k}
-        state_dict.update(non_pretrained_dict)
-
-        model.load_state_dict(state_dict)
-
-        for p in model.in_conv.parameters():
-            p.requires_grad = False
-        for p in model.down_blocks.parameters():
-            p.requires_grad = False
-        for p in model.spatial_reduction.parameters():
-            p.requires_grad = False
-
-        '''
-        layers_to_remove = []
-        for k in state_dict:
-            if "down_block" in k or "up_block" in k or "out_conv" in k or "linear_clf" in k:  # or "in_conv" in k or "spatial_red" in k
-                layers_to_remove.append(k)
-
-        for key in layers_to_remove:
-            del state_dict[key]
-
-        model.apply(weight_init)
-        model_dict = model.state_dict()
-
-        non_pretrained_dict = {k: v for k, v in model_dict.items() if "down_block" in k or
-                               "up_block" in k or "out_conv" in k} # or "in_conv" in k or "spatial_red" in k
-        state_dict.update(non_pretrained_dict)
-
-        model.load_state_dict(state_dict)
-        '''
         # --------------------------------
     else:
         if config.weight_folder:
@@ -470,65 +433,22 @@ def main(config):
         # optimizer = torch.optim.RAdam(model.parameters(), lr=config.lr)
         # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1, last_epoch=-1, verbose=False)
 
-        if config.weight_folder and not is_test_run and not finetuning:
-            optimizer.load_state_dict(optimizer_state_resume)
+        # if config.weight_folder and not is_test_run and not finetuning:
+        #    optimizer.load_state_dict(optimizer_state_resume)
 
-    if not config.pretrain:
-        # note that we ensure ignoring some classes by setting weight to 0
-        weights = torch.ones(config.num_classes, device=device).float()
-        weights[config.ignore_index] = 0
+    # note that we ensure ignoring some classes by setting weight to 0
+    weights = torch.ones(config.num_classes, device=device).float()
+    weights[config.ignore_index] = 0
 
-        # ---- ATTEMPTS TO RESOLVE CLASS IMBALANCE PROBLEM ----------------
-        #
-        # ---- By adjusting weights ----------
+    criterion = nn.CrossEntropyLoss(weight=weights,
+                                    # label_smoothing=0.1
+                                    )
 
-        # first attempt
-        # weights[:-1] = 1 / torch.tensor([0.3, 0.08, 0.015, 0.08, 0.22, 0.1, 0.09, 0.02, 0.05, 0.001, 0.015, 0.008,
-        #                                 0.015, 0.05], device=device)
+    # -----------------------------------------------------------------------
 
-        # second attempt (v2)
-        # weights[:-1] = 1 / torch.tensor([0.5, 0.5, 0.5, 0.5, 0.5, 0.4, 0.1, 0.1, 0.1, 0.04, 0.1, 0.1,
-        #                                 0.1, 0.1], device=device)
-
-        criterion = nn.CrossEntropyLoss(weight=weights,
-                                        # label_smoothing=0.2
-                                        )
-
-        # ---- By using specific loss functions ----------
-
-        # Focal loss ; ref: https://arxiv.org/pdf/1708.02002v2.pdf  (modified CE loss)
-        '''
-        criterion = FocalLoss(mode='multiclass',
-                              gamma=2.0,
-                              ignore_index=[i for i in range(config.num_classes)][config.ignore_index])
-
-
-        # Recall Loss; ref: https://arxiv.org/pdf/2106.14917.pdf (similarly like FocalLoss it tries to dynamically weight
-        #                                                           CrossEntropy)
-        criterion = RecallCrossEntropy(n_classes=config.num_classes,
-                                       ignore_index=[i for i in range(config.num_classes)][config.ignore_index])
-
-        # Lovasz loss; ref: https://arxiv.org/pdf/1705.08790.pdf  (it optimizes IoU)
-        criterion = LovaszLoss(mode='multiclass', per_image=False,
-                               ignore_index=[i for i in range(config.num_classes)][config.ignore_index])
-
-        # Tversky Loss ; ref: https://arxiv.org/pdf/1706.05721.pdf
-        #   (modification of dice-coefficient or jaccard coefficient by weighting FP and FN)
-        criterion = TverskyLoss(mode='multiclass', classes=None,
-                                smooth=0.0, ignore_index=[i for i in range(config.num_classes)][config.ignore_index],
-                                alpha=0.5,  # alpha weights FP
-                                beta=0.5,  # beta weights FN
-                                gamma=1.0
-                                )
-        '''
-        # -----------------------------------------------------------------------
-
-        # SmoothCrossEntropy2D - our modification of classical 2D CE with specific labels smoothing on
-        #  boundaries of crop fields which should help with pixel mixing problem (on boundaries of semantic classes)
-        # criterion = SmoothCrossEntropy2D(weight=weights, background_treatment=False)
-    else:
-
-        criterion = nn.MSELoss()
+    # SmoothCrossEntropy2D - our modification of classical 2D CE with specific labels smoothing on
+    #  boundaries of crop fields which should help with pixel mixing problem (on boundaries of semantic classes)
+    # criterion = SmoothCrossEntropy2D(weight=weights, background_treatment=False)
 
     if not is_test_run:
         # Training loop
@@ -539,30 +459,40 @@ def main(config):
 
             model.train()
 
-            if not config.pretrain:
-                train_metrics = iterate(
+            train_metrics = iterate(
+                model,
+                data_loader=train_loader,
+                criterion=criterion,
+                config=config,
+                optimizer=optimizer,
+                scheduler=None,
+                mode="train",
+                device=device,
+            )
+            if epoch % config.val_every == 0 and epoch > config.val_after:
+                logging.info("VALIDATION ... ")
+                model.eval()
+
+                val_metrics = iterate(
                     model,
-                    data_loader=train_loader,
+                    data_loader=val_loader,
                     criterion=criterion,
                     config=config,
-                    optimizer=optimizer,
-                    scheduler=None,
-                    mode="train",
+                    mode="val",
                     device=device,
                 )
-                if epoch % config.val_every == 0 and epoch > config.val_after:
-                    logging.info("VALIDATION ... ")
-                    model.eval()
 
-                    val_metrics = iterate(
-                        model,
-                        data_loader=val_loader,
-                        criterion=criterion,
-                        config=config,
-                        mode="val",
-                        device=device,
+                if config.add_boundary_loss:
+                    logging.info(
+                        "Loss {:.4f},  Acc {:.2f},  IoU {:.4f}, Acc_b {:.2f},  IoU_b {:.4f}".format(
+                            val_metrics["val_loss"],
+                            val_metrics["val_accuracy"],
+                            val_metrics["val_IoU"],
+                            val_metrics["val_accuracy_b"],
+                            val_metrics["val_IoU_b"],
+                        )
                     )
-
+                else:
                     logging.info(
                         "Loss {:.4f},  Acc {:.2f},  IoU {:.4f}".format(
                             val_metrics["val_loss"],
@@ -571,124 +501,59 @@ def main(config):
                         )
                     )
 
-                    trainlog[epoch] = {**train_metrics, **val_metrics}
-                    checkpoint(config.fold, trainlog, config)
-                    if val_metrics["val_IoU"] >= best_mIoU:
-                        best_mIoU = val_metrics["val_IoU"]
-                        torch.save(
-                            {
-                                "best_mIoU": best_mIoU,
-                                "epoch": epoch,
-                                "state_dict": model.state_dict(),
-                                "optimizer": optimizer.state_dict(),
-                            },
-                            os.path.join(
-                                config.res_dir, f"Fold_{config.fold}", "model.pth.tar"
-                            ),
-                        )
-                else:
-                    trainlog[epoch] = {**train_metrics}
-                    checkpoint(config.fold, trainlog, config)
+                trainlog[epoch] = {**train_metrics, **val_metrics}
+                checkpoint(config.fold, trainlog, config)
+                if val_metrics["val_IoU"] >= best_mIoU:
+                    best_mIoU = val_metrics["val_IoU"]
+                    torch.save(
+                        {
+                            "best_mIoU": best_mIoU,
+                            "epoch": epoch,
+                            "state_dict": model.state_dict(),
+                            "optimizer": optimizer.state_dict(),
+                        },
+                        os.path.join(
+                            config.res_dir, f"Fold_{config.fold}", "model.pth.tar"
+                        ),
+                    )
             else:
-                train_metrics = iterate_pretrain(
-                    model,
-                    data_loader=train_loader,
-                    criterion=criterion,
-                    config=config,
-                    optimizer=optimizer,
-                    scheduler=None,
-                    mode="train",
-                    device=device,
+                trainlog[epoch] = {**train_metrics}
+                checkpoint(config.fold, trainlog, config)
+
+        model.load_state_dict(
+            torch.load(
+                os.path.join(
+                    config.res_dir, f"Fold_{config.fold}", "model.pth.tar"
                 )
-                if epoch % config.val_every == 0 and epoch > config.val_after:
-                    logging.info("VALIDATION ... ")
-                    model.eval()
-
-                    val_metrics = iterate_pretrain(
-                        model,
-                        data_loader=val_loader,
-                        criterion=criterion,
-                        config=config,
-                        mode="val",
-                        device=device,
-                    )
-
-                    logging.info(
-                        "Loss {:.4f}".format(
-                            val_metrics["val_loss"],
-                        )
-                    )
-
-                    trainlog[epoch] = {**train_metrics, **val_metrics}
-                    checkpoint(config.fold, trainlog, config)
-                    if val_metrics["val_loss"] <= best_loss:
-                        best_loss = val_metrics["val_loss"]
-                        torch.save(
-                            {
-                                "best_loss": best_loss,
-                                "epoch": epoch,
-                                "state_dict": model.state_dict(),
-                                "optimizer": optimizer.state_dict(),
-                            },
-                            os.path.join(
-                                config.res_dir, f"Fold_{config.fold}", "model_pretrain.pth.tar"
-                            ),
-                        )
-                    if epoch % 20 == 0:
-                        torch.save(
-                            {
-                                "epoch": epoch,
-                                "state_dict": model.state_dict(),
-                                "optimizer": optimizer.state_dict(),
-                            },
-                            os.path.join(
-                                config.res_dir, f"Fold_{config.fold}", f"model_pretrain_{epoch}.pth.tar"
-                            ),
-                        )
-                else:
-                    trainlog[epoch] = {**train_metrics}
-                    checkpoint(config.fold, trainlog, config)
-
-        if config.pretrain:
-            model.load_state_dict(
-                torch.load(
-                    os.path.join(
-                        config.res_dir, f"Fold_{config.fold}", "model_pretrain.pth.tar"
-                    )
-                )["state_dict"]
-            )
-        else:
-            model.load_state_dict(
-                torch.load(
-                    os.path.join(
-                        config.res_dir, f"Fold_{config.fold}", "model.pth.tar"
-                    )
-                )["state_dict"]
-            )
+            )["state_dict"]
+        )
 
     # Inference
     logging.info("TESTING BEST EPOCH ...")
 
     model.eval()
 
-    if config.pretrain:
-        test_metrics = iterate_pretrain(
+    if config.add_boundary_loss:
+        test_metrics, conf_mat, conf_mat_top2, conf_mat_b = iterate(
             model,
             data_loader=test_loader,
             criterion=criterion,
             config=config,
             mode="test",
             device=device,
+            test_region=config.test_region
         )
         logging.info(
-            f"Loss {test_metrics['test_loss']}"
-
+            "Loss {:.4f},  Acc {:.2f},  IoU {:.4f}, Acc_top2 {:.2f},  IoU_top2 {:.4f}, Acc_b {:.2f},  IoU_b {:.4f},".format(
+                test_metrics["test_loss"],
+                test_metrics["test_accuracy"],
+                test_metrics["test_IoU"],
+                test_metrics["test_accuracy_top2"],
+                test_metrics["test_IoU_top2"],
+                test_metrics["test_accuracy_b"],
+                test_metrics["test_IoU_b"],
+            )
         )
-        save_results(config.fold, test_metrics, None, config,
-                     name=f"{config.test_region}_", top2=False)
-        save_results(config.fold, test_metrics, None, config,
-                     name=f"{config.test_region}_", top2=True)
-
     else:
         test_metrics, conf_mat, conf_mat_top2 = iterate(
             model,
@@ -697,6 +562,7 @@ def main(config):
             config=config,
             mode="test",
             device=device,
+            test_region=config.test_region
         )
         logging.info(
             "Loss {:.4f},  Acc {:.2f},  IoU {:.4f}, Acc_top2 {:.2f},  IoU_top2 {:.4f}".format(
@@ -707,13 +573,13 @@ def main(config):
                 test_metrics["test_IoU_top2"],
             )
         )
-        save_results(config.fold, test_metrics, conf_mat.cpu().numpy(), config,
-                     name=f"{config.test_region}_", top2=False)
-        save_results(config.fold, test_metrics, conf_mat_top2.cpu().numpy(), config,
-                     name=f"{config.test_region}_", top2=True)
+    save_results(config.fold, test_metrics, conf_mat.cpu().numpy(), config,
+                 name=f"{config.test_region}_", top2=False)
+    save_results(config.fold, test_metrics, conf_mat_top2.cpu().numpy(), config,
+                 name=f"{config.test_region}_", top2=True)
 
-        overall_performance(config, name=f"{config.test_region}_", top2=False)
-        overall_performance(config, name=f"{config.test_region}_", top2=True)
+    overall_performance(config, name=f"{config.test_region}_", top2=False)
+    overall_performance(config, name=f"{config.test_region}_", top2=True)
 
 
 if __name__ == "__main__":
@@ -724,6 +590,11 @@ if __name__ == "__main__":
             v = v.replace("]", "")
             config.__setattr__(k, list(map(int, v.split(","))))
 
+    np.random.seed(config.rdm_seed)
+    torch.manual_seed(config.rdm_seed)
+    torch.backends.cudnn.benchmark = False
+
+    # ---------------------------
 
     assert not config.finetune or not config.test, f'Use only one flag. Either `--finetune` or `--test`'
     assert os.path.isdir(config.dataset_folder), f'Path {config.dataset_folder} for dataset is not valid'
@@ -755,4 +626,3 @@ if __name__ == "__main__":
     for f in folds:
         config.fold = f
         main(config)
-
