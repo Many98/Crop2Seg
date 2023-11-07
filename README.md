@@ -9,19 +9,6 @@ Finally we want to provide web application which can process Sentinel-2 data and
 ## Requirements
 Please see requirement.txt file (TODO update it)
 
-## Usage
-
-
-### Script train.py
-Main script for model training/testing/finetuning etc.
-
-### Script crop2seg.py
- Main script for web application (see Demo below)
- 
- To run web app on localhost use: 
-```bash
-streamlit run crop2seg.py
-```
 
 ## Models
 
@@ -68,6 +55,106 @@ Web interface is created using streamlit and based on this [streamlit-template](
 #### Schema of processing pipeline
 
 ![](https://raw.githubusercontent.com/Many98/Crop2Seg/main/data/demo/pipeline_schema.png)
+
+
+## Usage
+
+
+### Script train.py
+Main script for model training/testing/finetuning etc.
+
+```bash
+$ python train.py --help
+
+usage: train.py [-h] [--model MODEL] [--encoder_widths ENCODER_WIDTHS] [--decoder_widths DECODER_WIDTHS] [--out_conv OUT_CONV] [--str_conv_k STR_CONV_K] [--str_conv_s STR_CONV_S] [--str_conv_p STR_CONV_P] [--agg_mode AGG_MODE]
+                [--encoder_norm ENCODER_NORM] [--n_head N_HEAD] [--d_model D_MODEL] [--d_k D_K] [--input_dim INPUT_DIM] [--num_queries NUM_QUERIES] [--temporal_dropout TEMPORAL_DROPOUT] [--augment] [--add_linear] [--add_boundary]
+                [--get_affine] [--dataset DATASET] [--test] [--test_region TEST_REGION] [--finetune] [--dataset_folder DATASET_FOLDER] [--norm_values_folder NORM_VALUES_FOLDER] [--weight_folder WEIGHT_FOLDER] [--res_dir RES_DIR]
+                [--rdm_seed RDM_SEED] [--device DEVICE] [--display_step DISPLAY_STEP] [--cache] [--epochs EPOCHS] [--batch_size BATCH_SIZE] [--lr LR] [--mono_date MONO_DATE] [--ref_date REF_DATE] [--fold FOLD]
+                [--num_classes NUM_CLASSES] [--ignore_index IGNORE_INDEX] [--pad_value PAD_VALUE] [--padding_mode PADDING_MODE] [--conv_type CONV_TYPE] [--use_mbconv] [--add_squeeze] [--use_doy] [--add_ndvi] [--use_abs_rel_enc]
+                [--seg_model SEG_MODEL] [--temp_model TEMP_MODEL] [--val_every VAL_EVERY] [--val_after VAL_AFTER]
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --model MODEL         Type of architecture to use. Can be one of: (utae/unet3d/timeunet/wtae)
+  --encoder_widths ENCODER_WIDTHS
+  --decoder_widths DECODER_WIDTHS
+  --out_conv OUT_CONV
+  --str_conv_k STR_CONV_K
+  --str_conv_s STR_CONV_S
+  --str_conv_p STR_CONV_P
+  --agg_mode AGG_MODE
+  --encoder_norm ENCODER_NORM
+  --n_head N_HEAD
+  --d_model D_MODEL     Dimension to which map value vectors before temporalencoding.
+  --d_k D_K             Dimension of learnable query vector.
+  --input_dim INPUT_DIM
+                        Number of input spectral channels
+  --num_queries NUM_QUERIES
+                        Number of learnable query vectors. This vectors areaveraged.
+  --temporal_dropout TEMPORAL_DROPOUT
+                        Probability of removing acquisition from time-series
+  --augment             Whether to perform augmentation of S2TSCZCrop Dataset
+  --add_linear          Whether to add linear transform to positional encoder
+  --add_boundary        Whether to add boundary loss. i.e. model will segment crops and boundary
+  --get_affine          Whether to return also affine transform
+  --dataset DATASET     Type of dataset to use. Can be one of: (s2tsczcrop/pastis)
+  --test                Whether to perform test run (inference)Weights stored in `--weight_folder` directory will be used
+  --test_region TEST_REGION
+                        Experimental setting. Can be one of ['all', 'boundary', 'interior']
+  --finetune            Whether to perform finetuning instead of training from scratch.Weights stored in `--weight_folder` directory will be used
+  --dataset_folder DATASET_FOLDER
+                        Path to the folder where is stored dataset.
+  --norm_values_folder NORM_VALUES_FOLDER
+                        Path to the folder where to look for NORM_S2_patch.json file storing normalization values
+  --weight_folder WEIGHT_FOLDER
+                        Path to folder containing the network weights in model.pth.tar file and model configuration file in conf.json.If you want to resume training then this folder should also have trainlog.json file.
+  --res_dir RES_DIR     Path to the folder where the results should be stored
+  --rdm_seed RDM_SEED   Random seed
+  --device DEVICE       Name of device to use for tensor computations (cuda/cpu)
+  --display_step DISPLAY_STEP
+                        Interval in batches between display of training metrics
+  --cache               If specified, the whole dataset is kept in RAM
+  --epochs EPOCHS       Number of epochs
+  --batch_size BATCH_SIZE
+                        Batch size
+  --lr LR               Learning rate
+  --mono_date MONO_DATE
+                        Whether to perform segmentation using only one element of time-series. Use integer or string in form (YYYY-MM-DD)
+  --ref_date REF_DATE   Reference date (YYYY-MM-DD) used in relative positional encoding scheme i.e. dates are encoded as difference between actual date and reference date. If you want to use absolute encodingusing day of years
+                        use `--use_doy` flag
+  --fold FOLD           Specify fold. (between 1 and 5) Note that this argument is used only as legacy argument and is used only for accessing correct normalization values e.g. if using PASTIS trainednetwork for fine-tuning
+  --num_classes NUM_CLASSES
+                        Number of classes used in segmentation task
+  --ignore_index IGNORE_INDEX
+                        Index of class to be ignored
+  --pad_value PAD_VALUE
+                        Padding value for time-series
+  --padding_mode PADDING_MODE
+                        Type of padding
+  --conv_type CONV_TYPE
+                        Type of convolutional layer. Must be one of '2d' or 'depthwise_separable'
+  --use_mbconv          Whether to use MBConv module instead of classical convolutional layers
+  --add_squeeze         Whether to add squeeze & excitation module
+  --use_doy             Whether to use absolute positional encoding (day of year) instead of relative encoding w.r.t. reference date
+  --add_ndvi            Whether to add NDVI channel at the end
+  --use_abs_rel_enc     Whether to use both date representations: Relative andabsolute (DOY)
+  --seg_model SEG_MODEL
+                        Model to use for segmentation
+  --temp_model TEMP_MODEL
+                        Model to use for temporal encoding
+  --val_every VAL_EVERY
+                        Interval in epochs between two validation steps.
+  --val_after VAL_AFTER
+                        Do validation only after that many epochs.
+```
+
+### Script crop2seg.py
+ Main script for web application (see Demo below)
+ 
+ To run web app on localhost use: 
+```bash
+streamlit run crop2seg.py
+```
 
 
 
