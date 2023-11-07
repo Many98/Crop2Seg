@@ -21,15 +21,30 @@ sys.path.append(root)
 
 from src.learning.metrics import confusion_matrix_analysis
 from src.learning.miou import IoU
+from src.helpers.postprocess import homogenize
 
-from src.backbones.utae import UTAE
+from src.backbones.utae import UTAE  # ours slightly adjusted implementation of utae
 from src.backbones.unet3d import UNet3D
+from src.backbones.timeunet import TimeUNet_v1, TimeUNet_v2
+from src.backbones.convgru import ConvGRU_Seg
+from src.backbones.convlstm import ConvLSTM_Seg
+from src.backbones.recunet import RecUNet
+from src.backbones.fpn import FPNConvLSTM
+from src.backbones.wtae import WTAE
+from src.backbones.etae import ETAE
+
+from src.learning.focal_loss import FocalCELoss
+
+from src.global_vars import AGRI_PATH_DATASET
+
+
+# from src.backbones.utae_original import UTAE  # original implementation
 
 
 def get_model(config):
     if config.model == "utae":
         model = UTAE(
-            input_dim=10,  # number of input channels
+            input_dim=config.input_dim,  # number of input channels
             encoder_widths=config.encoder_widths,
             decoder_widths=config.decoder_widths,
             out_conv=config.out_conv,
@@ -48,13 +63,166 @@ def get_model(config):
             # ------------------------------
             # From here starts added arguments
             conv_type=config.conv_type,
-            use_transpose_conv=config.use_transpose_conv,
             use_mbconv=config.use_mbconv,
-            add_squeeze_excit=config.add_squeeze
+            add_squeeze_excit=config.add_squeeze,
+            use_abs_rel_enc=config.use_abs_rel_enc,
+            num_queries=config.num_queries,
+            use_doy=config.use_doy,
+            add_linear=config.add_linear,
+            add_boundary_loss=config.add_boundary_loss
+        )
+    if config.model == "etae":
+        model = ETAE(
+            input_dim=config.input_dim,  # number of input channels
+            encoder_widths=config.encoder_widths,
+            decoder_widths=config.decoder_widths,
+            out_conv=config.out_conv,
+            str_conv_k=config.str_conv_k,
+            str_conv_s=config.str_conv_s,
+            str_conv_p=config.str_conv_p,
+            agg_mode=config.agg_mode,
+            encoder_norm=config.encoder_norm,
+            n_head=config.n_head,
+            d_model=config.d_model,
+            d_k=config.d_k,
+            encoder=False,
+            return_maps=False,
+            pad_value=config.pad_value,
+            padding_mode=config.padding_mode,
+            # ------------------------------
+            # From here starts added arguments
+            conv_type=config.conv_type,
+            use_mbconv=config.use_mbconv,
+            add_squeeze_excit=config.add_squeeze,
+            use_abs_rel_enc=config.use_abs_rel_enc,
+            num_queries=config.num_queries,
+            use_doy=config.use_doy,
+            seg_model=config.seg_model,
+            temp_model=config.temp_model,
+            add_linear=config.add_linear
+        )
+    if config.model == "wtae":
+        model = WTAE(
+            input_dim=config.input_dim,  # number of input channels
+            encoder_widths=config.encoder_widths,
+            decoder_widths=config.decoder_widths,
+            out_conv=config.out_conv,
+            str_conv_k=config.str_conv_k,
+            str_conv_s=config.str_conv_s,
+            str_conv_p=config.str_conv_p,
+            agg_mode=config.agg_mode,
+            encoder_norm=config.encoder_norm,
+            n_head=config.n_head,
+            d_model=config.d_model,
+            d_k=config.d_k,
+            encoder=False,
+            return_maps=False,
+            pad_value=config.pad_value,
+            padding_mode=config.padding_mode,
+            # ------------------------------
+            # From here starts added arguments
+            conv_type=config.conv_type,
+            use_mbconv=config.use_mbconv,
+            add_squeeze_excit=config.add_squeeze,
+            use_abs_rel_enc=config.use_abs_rel_enc,
+            num_queries=config.num_queries,
+            use_doy=config.use_doy,
+            add_linear=config.add_linear,
+            add_boundary_loss=config.add_boundary_loss
+        )
+    elif config.model == "timeunet":
+        model = TimeUNet_v1(
+            input_dim=config.input_dim,  # number of input channels
+            encoder_widths=config.encoder_widths,
+            decoder_widths=config.decoder_widths,
+            out_conv=config.out_conv,
+            str_conv_k=config.str_conv_k,
+            str_conv_s=config.str_conv_s,
+            str_conv_p=config.str_conv_p,
+            agg_mode=config.agg_mode,
+            encoder_norm=config.encoder_norm,
+            n_head=config.n_head,
+            d_model=config.d_model,
+            d_k=config.d_k,
+            encoder=False,
+            return_maps=False,
+            pad_value=config.pad_value,
+            padding_mode=config.padding_mode,
+            # ------------------------------
+            # From here starts added arguments
+            conv_type=config.conv_type,
+            use_mbconv=config.use_mbconv,
+            add_squeeze_excit=config.add_squeeze,
+            use_abs_rel_enc=config.use_abs_rel_enc,
+            num_queries=config.num_queries,
+            use_doy=config.use_doy,
+            add_linear=config.add_linear
         )
     elif config.model == "unet3d":
         model = UNet3D(
-            in_channel=10, n_classes=config.num_classes, pad_value=config.pad_value
+            in_channel=config.input_dim, n_classes=config.num_classes, pad_value=config.pad_value
+        )
+    elif config.model == "fpn":
+        model = FPNConvLSTM(
+            input_dim=config.input_dim,
+            num_classes=config.num_classes,
+            inconv=[32, 64],
+            n_levels=4,
+            n_channels=64,
+            hidden_size=88,
+            input_shape=(128, 128),
+            mid_conv=True,
+            pad_value=config.pad_value,
+        )
+    elif config.model == "convlstm":
+        model = ConvLSTM_Seg(
+            num_classes=config.num_classes,
+            input_size=(128, 128),
+            input_dim=config.input_dim,
+            kernel_size=(3, 3),
+            hidden_dim=160,
+        )
+    elif config.model == "convgru":
+        model = ConvGRU_Seg(
+            num_classes=config.num_classes,
+            input_size=(128, 128),
+            input_dim=config.input_dim,
+            kernel_size=(3, 3),
+            hidden_dim=180,
+        )
+    elif config.model == "uconvlstm":
+        model = RecUNet(
+            input_dim=config.input_dim,
+            encoder_widths=[64, 64, 64, 128],
+            decoder_widths=[32, 32, 64, 128],
+            out_conv=[32, 20],
+            str_conv_k=4,
+            str_conv_s=2,
+            str_conv_p=1,
+            temporal="lstm",
+            input_size=128,
+            encoder_norm="group",
+            hidden_dim=64,
+            encoder=False,
+            padding_mode="zeros",
+            pad_value=0,
+        )
+    elif config.model == "buconvlstm":
+        model = RecUNet(
+            input_dim=config.input_dim,
+            encoder_widths=[64, 64, 64, 128],
+            decoder_widths=[32, 32, 64, 128],
+            out_conv=[32, 20],
+            str_conv_k=4,
+            str_conv_s=2,
+            str_conv_p=1,
+            temporal="lstm",
+            input_size=128,
+            encoder_norm="group",
+            hidden_dim=30,
+            encoder=False,
+            padding_mode="zeros",
+            pad_value=0,
         )
     return model
 
@@ -87,7 +255,8 @@ def get_dilated(target: torch.tensor, n_classes: int, device: str, connectivity:
 
 
 def iterate(
-        model, data_loader, criterion, config, optimizer=None, mode="train", device=None, test_region='all'
+        model, data_loader, criterion, config, optimizer=None, scheduler=None, mode="train", device=None,
+        test_region='all', **kwargs
 ):
     """
     helper function implementing training/validation/testing loop
@@ -98,6 +267,7 @@ def iterate(
     criterion
     config
     optimizer
+    scheduler
     mode
     device
     test_region: str
@@ -117,13 +287,29 @@ def iterate(
         cm_device=config.device,
     )
 
+    if config.add_boundary_loss:
+        iou_meter_boundary = IoU(
+            num_classes=config.num_classes,
+            ignore_index=config.ignore_index,
+            cm_device=config.device,
+        )
+
+        criterion_b = FocalCELoss(gamma=2.0)
+
     t_start = time.time()
     for i, batch in enumerate(data_loader):
         if device is not None:
             batch = recursive_todevice(batch, device)
-        (x, dates), y = batch
+
+        if config.get_affine:
+            (x, dates), y, affine = batch
+        else:
+            (x, dates), y = batch
         y = y.long()
 
+        if config.add_boundary_loss:
+            dilated = get_dilated(y, config.num_classes, x.device, 4)  # shape is B x NUM_CLASSES x H x W
+            y_b = torch.where(dilated.sum(1) > 1, 1, 0)  # 0 is background; 1 is boundary
         # -----------HERE ARE EXPERIMENTAL CHANGES ---------------------
         # boundary is removed from training but not from performance evaluation
         '''
@@ -155,16 +341,37 @@ def iterate(
             optimizer.zero_grad()
             out = model(x, batch_positions=dates)
 
+        if config.add_boundary_loss:
+            out, out_b = out
+            loss_b = criterion_b(out_b, y_b)
+
         # EXPERIMENTAL SETTING
         # loss = criterion(out, y2)
         loss = criterion(out, y)
         if mode == "train":
+
+            loss = loss + loss_b if config.add_boundary_loss else loss
             loss.backward()
             optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
 
         with torch.no_grad():
             pred = out.argmax(dim=1)
             pred_ = out.topk(2, dim=1).indices
+            if config.add_boundary_loss:
+                pred_b = out_b.argmax(dim=1)
+
+            if config.get_affine:
+                pp = []
+                for p, a in zip(pred, affine):
+                    p = homogenize(p.detach().cpu().numpy(),
+                                   vector_data_path=AGRI_PATH_DATASET,
+                                   affine=a.cpu().numpy(), array_out=True)
+                    pp.append(torch.from_numpy(p))
+
+                pred = torch.stack(pp).to('cuda')
+
 
         # Specify test region default is all
         if test_region in ['boundary', 'interior']:
@@ -185,31 +392,60 @@ def iterate(
         iou_meter_top2.add(pred_top2, y)
         loss_meter.add(loss.item())
 
+        if config.add_boundary_loss:
+            iou_meter_boundary.add(pred_b, y_b)
+
         if (i + 1) % config.display_step == 0:
             miou, acc = iou_meter.get_miou_acc()
             miou_top2, acc_top2 = iou_meter_top2.get_miou_acc()
-            logging.info(
-                "Step [{}/{}], Loss: {:.4f}, Acc : {:.2f}, mIoU {:.2f}, Acc_t2 : {:.2f}, mIoU_t2 {:.2f}".format(
-                    i + 1, len(data_loader), loss_meter.value()[0], acc, miou, acc_top2, miou_top2
+            if config.add_boundary_loss:
+                miou_b, acc_b = iou_meter_boundary.get_miou_acc()
+                logging.info(
+                    "Step [{}/{}], Loss: {:.4f}, Acc : {:.2f}, mIoU {:.2f}, Acc_t2 : {:.2f}, mIoU_t2 {:.2f},\
+                     Acc_b : {:.2f}, mIoU_b {:.2f}".format(
+                        i + 1, len(data_loader), loss_meter.value()[0], acc, miou, acc_top2, miou_top2, acc_b,
+                        miou_b
+                    )
                 )
-            )
-
+            else:
+                logging.info(
+                    "Step [{}/{}], Loss: {:.4f}, Acc : {:.2f}, mIoU {:.2f}, Acc_t2 : {:.2f}, mIoU_t2 {:.2f}".format(
+                        i + 1, len(data_loader), loss_meter.value()[0], acc, miou, acc_top2, miou_top2
+                    )
+                )
     t_end = time.time()
     total_time = t_end - t_start
     logging.info("Epoch time : {:.1f}s".format(total_time))
     miou, acc = iou_meter.get_miou_acc()
     miou_top2, acc_top2 = iou_meter_top2.get_miou_acc()
-    metrics = {
-        "{}_accuracy".format(mode): acc,
-        "{}_accuracy_top2".format(mode): acc_top2,
-        "{}_loss".format(mode): loss_meter.value()[0],
-        "{}_IoU".format(mode): miou,
-        "{}_IoU_top2".format(mode): miou_top2,
-        "{}_epoch_time".format(mode): total_time,
-    }
+    if config.add_boundary_loss:
+        miou_b, acc_b = iou_meter_boundary.get_miou_acc()
+        metrics = {
+            "{}_accuracy".format(mode): acc,
+            "{}_accuracy_b".format(mode): acc_b,
+            "{}_accuracy_top2".format(mode): acc_top2,
+            "{}_loss".format(mode): loss_meter.value()[0],
+            "{}_IoU".format(mode): miou,
+            "{}_IoU_b".format(mode): miou_b,
+            "{}_IoU_top2".format(mode): miou_top2,
+            "{}_epoch_time".format(mode): total_time,
+        }
+    else:
+        metrics = {
+            "{}_accuracy".format(mode): acc,
+            "{}_accuracy_top2".format(mode): acc_top2,
+            "{}_loss".format(mode): loss_meter.value()[0],
+            "{}_IoU".format(mode): miou,
+            "{}_IoU_top2".format(mode): miou_top2,
+            "{}_epoch_time".format(mode): total_time,
+        }
 
     if mode == "test":
-        return metrics, iou_meter.conf_metric.value(), iou_meter_top2.conf_metric.value()  # confusion matrix
+        if config.add_boundary_loss:
+            return metrics, iou_meter.conf_metric.value(), iou_meter_top2.conf_metric.value() , iou_meter_boundary.conf_metric.value()
+        else:
+            return metrics, iou_meter.conf_metric.value(), iou_meter_top2.conf_metric.value()  # confusion matrix
+
     else:
         return metrics
 
@@ -240,17 +476,18 @@ def checkpoint(fold, log, config):
 
 
 def save_results(fold, metrics, conf_mat, config, name="", top2=False):
-    if not os.path.isfile(os.path.join(config.res_dir, "Fold_{}".format(fold), f"{name}test_metrics.json")):
-        with open(
-                os.path.join(config.res_dir, "Fold_{}".format(fold), f"{name}test_metrics.json"), "w"
-        ) as outfile:
-            json.dump(metrics, outfile, indent=4)
-    pkl.dump(
-        conf_mat,
-        open(
-            os.path.join(config.res_dir, "Fold_{}".format(fold), f"{name}conf_mat{'_top2' if top2 else ''}.pkl"), "wb"
-        ),
-    )
+    with open(
+            os.path.join(config.res_dir, f"Fold_{fold}", f"{name}test_metrics.json"), "w"
+    ) as outfile:
+        json.dump(metrics, outfile, indent=4)
+
+    if conf_mat is not None:
+        pkl.dump(
+            conf_mat,
+            open(
+                os.path.join(config.res_dir, f"Fold_{fold}", f"{name}conf_mat{'_top2' if top2 else ''}.pkl"), "wb"
+            ),
+        )
 
 
 def overall_performance(config, fold=None, name="", top2=False):
@@ -266,7 +503,7 @@ def overall_performance(config, fold=None, name="", top2=False):
                     )
                 )
             except:
-                return
+                pass
     else:
         try:
             cm += pkl.load(
