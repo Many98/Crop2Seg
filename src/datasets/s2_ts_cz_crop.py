@@ -32,19 +32,19 @@ logging.getLogger().setLevel(logging.INFO)
 
 # labels
 labels = ['Background 0', 'Permanent grassland 1', 'Annual fruit and vegetable 2', 'Summer cereals 3',
-          'Winter cereals 4', 'Rapeseed 5', 'Maize 6', 'Annual forage crops 7', 'Sugar beat 8', 'Flax and Hemp 9',
+          'Winter cereals 4', 'Rapeseed 5', 'Maize 6', 'Annual forage crops 7', 'Sugar beet 8', 'Flax and Hemp 9',
           'Permanent fruit 10', 'Hopyards 11', 'Vineyards 12', 'Other crops 13', 'Not classified 14']
 
 labels_short = ['Background 0', 'Grassland 1', 'Fruit & vegetable 2', 'Summer cereals 3',
-                'Winter cereals 4', 'Rapeseed 5', 'Maize 6', 'Forage crops 7', 'Sugar beat 8', 'Flax & Hemp 9',
+                'Winter cereals 4', 'Rapeseed 5', 'Maize 6', 'Forage crops 7', 'Sugar beet 8', 'Flax & Hemp 9',
                 'Permanent fruit 10', 'Hopyards 11', 'Vineyards 12', 'Other crops 13', 'Not classified 14']
 
 labels_super_short = ['Background', 'Grassland', 'Fruit_vegetable', 'Summer_cereals',
-                      'Winter_cereals', 'Rapeseed', 'Maize', 'Forage crops', 'Sugar_beat', 'Flax_Hemp',
+                      'Winter_cereals', 'Rapeseed', 'Maize', 'Forage crops', 'Sugar_beet', 'Flax_Hemp',
                       'Permanent_fruit', 'Hopyards', 'Vineyards', 'Other_crops', 'Not_classified', 'Boundary']
 
 labels_super_short_2 = ['Background', 'Grassland', 'Fruit/vegetable', 'Summer cereals',
-                        'Winter cereals', 'Rapeseed', 'Maize', 'Forage crops', 'Sugar beat', 'Flax/Hemp',
+                        'Winter cereals', 'Rapeseed', 'Maize', 'Forage crops', 'Sugar beet', 'Flax/Hemp',
                         'Permanent fruit', 'Hopyards', 'Vineyards', 'Other crops', 'Not classified']
 
 
@@ -168,6 +168,7 @@ class S2TSCZCropDataset(tdata.Dataset):
             transform=None,
             add_ndvi=False,
             temporal_dropout=0.0,
+            get_affine=False,
             *args, **kwargs
     ):
         """
@@ -217,6 +218,10 @@ class S2TSCZCropDataset(tdata.Dataset):
                 Transformation which will be applied to input tensor and mask
             add_ndvi: (bool)
                 Whether to add NDVI channel at the end of spectral channels
+            temporal_dropout: (float)
+                Probability of temporal dropout
+            get_affine: (bool)
+                Whether to return also affine transforms of data
 
         """
         super().__init__()
@@ -227,6 +232,7 @@ class S2TSCZCropDataset(tdata.Dataset):
         self.use_abs_rel_enc = use_abs_rel_enc
         self.use_doy = False if use_abs_rel_enc else use_doy
         self.set_type = set_type
+        self.get_affine = get_affine
 
         self.transform = transform
         self.add_ndvi = add_ndvi
@@ -343,6 +349,9 @@ class S2TSCZCropDataset(tdata.Dataset):
     def __getitem__(self, item):
         id_patch = self.id_patches[item]
 
+        if self.get_affine:
+            affine = self.meta_patch[self.meta_patch.ID_PATCH == id_patch]['affine'].values[0]
+
         # Retrieve and prepare satellite data
         if not self.cache or item not in self.memory.keys():
             data = {
@@ -357,8 +366,8 @@ class S2TSCZCropDataset(tdata.Dataset):
             data = {s: torch.from_numpy(a)[:, self.channels_order, ...] for s, a in data.items()}
 
             if self.add_ndvi:
-                # NDVI B08(NIR) + B04(Red) / B08(NIR) - B04(Red)
-                # NDVI red edge B08(NIR) + B06(Red edge) / B08(NIR) - B06(Red edge)
+                # NDVI B08(NIR) - B04(Red) / B08(NIR) + B04(Red)
+                # NDVI red edge B08(NIR) - B06(Red edge) / B08(NIR) + B06(Red edge)
                 #  we do not normalize it (its by definition between -1, 1)
                 #  no data gets 0 as value
 
@@ -445,10 +454,6 @@ class S2TSCZCropDataset(tdata.Dataset):
         data = data['S2']
         dates = dates['S2']
 
-        #new_dates = torch.where(dates > 190)[0]
-        #dates = dates[new_dates] - 190
-        #data = data[new_dates]
-
         if self.use_abs_rel_enc:
             dates2 = dates2['S2']
 
@@ -457,11 +462,11 @@ class S2TSCZCropDataset(tdata.Dataset):
                 f'for dates T={dates.shape[0]}. Id of patch is {id_patch}'
 
         if self.transform and self.set_type == 'train':
-            w = self.meta_patch.loc[id_patch, 'weight']
-            data, target = self.transform(data, target, w)  # 4d tensor T x C x H x W, 2d tensor H x W
+            data, target = self.transform(data, target)  # 4d tensor T x C x H x W, 2d tensor H x W
 
         if self.set_type == 'train' and self.temporal_dropout > 0.:
             ps = np.random.sample()
+            '''
             if ps < 0.4:
                 # remove acquisition with probability of temporal_dropout
                 probas = torch.rand(data.shape[0])
@@ -478,11 +483,34 @@ class S2TSCZCropDataset(tdata.Dataset):
                 if self.use_abs_rel_enc:
                     dates2 = dates2[:to_idx]
             # there is 20% probability  than temporal drop nor shortening of ts will be performed
+            
+            '''
+            if ps < 0.6:
+                # remove acquisition with probability of temporal_dropout
+                probas = torch.rand(data.shape[0])
+                drop = torch.where(probas > self.temporal_dropout)[0]
+                data = data[drop]
+                dates = dates[drop]
+                if self.use_abs_rel_enc:
+                    dates2 = dates2[drop]
+            else:
+                # shorten time-series from right
+                to_idx = np.random.randint(6 * data.shape[0] // 7, data.shape[0])
+                data = data[:to_idx]
+                dates = dates[:to_idx]
+                if self.use_abs_rel_enc:
+                    dates2 = dates2[:to_idx]
 
         if self.use_abs_rel_enc:
-            return (data, torch.cat([dates[..., None], dates2[..., None]], axis=1)), target
+            if self.get_affine:
+                return (data, torch.cat([dates[..., None], dates2[..., None]], axis=1)), target, torch.tensor(affine)
+            else:
+                return (data, torch.cat([dates[..., None], dates2[..., None]], axis=1)), target
         else:
-            return (data, dates), target
+            if self.get_affine:
+                return (data, dates), target, torch.tensor(affine)
+            else:
+                return (data, dates), target
 
     def rasterize_target(self, item, export=False):
         id_patch = self.id_patches[item]
