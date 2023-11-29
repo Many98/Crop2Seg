@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 from scipy.ndimage.measurements import label
 import torch
 
@@ -142,7 +143,7 @@ def prediction2point_layer(prediction: np.ndarray, affine: list, epsg: str = 'ep
         hard_pred = np.argmax(prediction, axis=0).astype('float32')
         prediction = np.vstack([hard_pred[None, ...], prediction])
     else:
-        raise Exception(f'Prediction array must 2 or 3 dimensional')
+        raise Exception(f'Prediction array must 2 or 3 dimensional but {prediction.ndim}-dimensional array provided')
 
     cols, rows = np.meshgrid(np.arange(prediction.shape[-2]), np.arange(prediction.shape[-1]))
     transform = rasterio.Affine(affine[0][0], affine[1][0], affine[2][0],
@@ -153,15 +154,15 @@ def prediction2point_layer(prediction: np.ndarray, affine: list, epsg: str = 'ep
     xcoords = np.array(xs)
     ycoords = np.array(ys)
 
-    if prediction.ndim == 2:
+    if prediction.ndim == 3:
         results = (
-            {'properties': {str(k): v for k, v in enumerate(prediction[:, c, r])},
+            {'properties': {str(k - 1) if k > 0 else 'raster_val': v for k, v in enumerate(prediction[:, r, c])},
              'geometry': Point(xcoords[0, c], ycoords[r, 0])}
             for c in range(prediction.shape[-1]) for r in range(prediction.shape[-2])
         )
     else:
         results = (
-            {'properties': {'raster_val': prediction[c, r]},
+            {'properties': {'raster_val': prediction[r, c]},
              'geometry': Point(xcoords[0, c], ycoords[r, 0])}
             for c in range(prediction.shape[-1]) for r in range(prediction.shape[-2])
         )
@@ -212,7 +213,6 @@ def raster2polygon_layer(raster: Union[str, rasterio.io.MemoryFile, rasterio.io.
 def raster2point_layer(raster: Union[str, rasterio.io.MemoryFile, rasterio.io.DatasetReader]) -> gpd.GeoDataFrame:
     """
     Converts (predicted) raster to point vector layer (geodataframe)
-    only hard labels are used
 
     Parameters
     ----------
@@ -235,11 +235,150 @@ def raster2point_layer(raster: Union[str, rasterio.io.MemoryFile, rasterio.io.Da
     return gpd.GeoDataFrame(df, crs=rds.rio.crs, geometry=geometry)
 
 
+def soften(polygons: gpd.GeoDataFrame, points: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Auxiliary function to get polygonization based on soft prediction
+
+    Parameters
+    ----------
+    polygons: gpd.GeoDataFrame
+        Stores polygon layer which will be enriched with soft prediction
+    points: gpd.GeoDataFrame
+        Stores point layer with soft prediction for every point
+    Returns
+    -------
+    gpd.GeoDataFrame or np.ndarray
+    """
+    polygons = polygons[polygons.columns.difference(['index'])]
+    merged = gpd.sjoin(polygons, points, how='left', predicate='covers')
+    merged = merged.reset_index()
+    merged = merged.rename(columns={'index': 'index_'})
+
+    cols = []
+    for c in merged.columns:
+        try:
+            _ = int(c)
+            cols.append(c)
+        except:
+            continue
+
+    cc = merged.groupby('index_', as_index=False)[cols].mean()
+    cc = cc[cc.columns.difference(['index_'])]
+    cc = cc[[str(i) for i in range(cc.shape[1])]]
+    vals = cc.values
+    top_2 = torch.from_numpy(vals).topk(k=2, dim=1)
+    top1 = top_2[1][:, 0].numpy()
+    top2 = top_2[1][:, 1].numpy()
+    z = np.where(top1 == 0)
+    top1[z] = np.where(top_2[0][z][:, 0] > 0.7, 0, top2[z])
+    cc['soft_label'] = top1
+    cc['soft_top2_label'] = top2
+
+    cc = cc.reset_index()
+    polygons = polygons.reset_index()
+    out = cc.merge(polygons, on='index', how='left')
+
+    return gpd.GeoDataFrame(out)
+
+
+def polygonize(prediction: Union[str, rasterio.io.MemoryFile, rasterio.io.DatasetReader, np.ndarray],
+               affine: list, epsg: str = 'epsg:32633', array_out: bool = False, type_: str = 'hard') -> Union[
+    gpd.GeoDataFrame, np.ndarray]:
+    """
+    Polygonize prediction (based on top-1 prediction)
+    Additionally enrich polygons with soft (predicted) distribution, soft labels, soft top 2 labels,
+    and finally some score which will evaluate overall confidence of polygon
+
+    Parameters
+    ----------
+    prediction: str or rasterio.io.MemoryFile or rasterio.io.DatasetReader or np.ndarray
+                array of shape [NUM CLASSES, HEIGHT, WIDTH] with class probabilities
+    epsg: str
+        epsg code of polygon layer
+    affine: list
+        affine transform of raster
+    array_out: bool
+        Whether to export homogenized prediction as numpy array
+    type_ : str
+        Type of processing / labels. Can be `hard` - final label is hard label based on hard labels of prediction
+                                            `soft` - fanl label is soft enriched with distribution
+    Returns
+    -------
+    gpd.GeoDataFrame or np.ndarray
+    """
+    if isinstance(prediction, rasterio.io.MemoryFile) or isinstance(prediction, rasterio.io.DatasetReader):
+        bbox = prediction.bounds
+        transform = prediction.transform
+        shape = prediction.shape[-2:]
+        polygons = raster2polygon_layer(prediction)
+        points = raster2point_layer(prediction) if type_ == 'soft' else None
+
+    elif isinstance(prediction, str):
+        r = rasterio.open(prediction)
+
+        bbox = r.bounds
+        transform = r.transform
+        shape = r.shape[-2:]
+        r.close()
+
+        polygons = raster2polygon_layer(prediction)
+        points = raster2point_layer(prediction) if type_ == 'soft' else None
+
+    elif isinstance(prediction, np.ndarray):
+        polygons = prediction2polygon_layer(prediction, affine, epsg)
+        points = prediction2point_layer(prediction, affine, epsg) if type_ == 'soft' else None
+        bb = polygons.total_bounds
+        bbox = BoundingBox(*list(bb))
+        shape = prediction.shape[-2:]
+        transform = rasterio.Affine(affine[0][0], affine[1][0], affine[2][0],
+                                    affine[0][1], affine[1][1], affine[2][1])
+    else:
+        raise Exception('Unsupported type of input prediction')
+
+    if type_ == 'hard':
+        polygons['raster_val'] = polygons['raster_val'].astype(np.uint8)
+        if array_out:
+            shapes_ = polygons[['geometry', 'raster_val']].values.tolist()
+            out = rasterio.features.rasterize(shapes_,
+                                              out_shape=shape,
+                                              fill=0,  # fill value for background
+                                              out=None,
+                                              transform=transform,
+                                              all_touched=False,
+                                              # merge_alg=MergeAlg.replace,  # ... used is default
+                                              default_value=1,
+                                              dtype=rasterio.uint8
+                                              )
+            return out
+
+        return polygons
+    else:
+        out = soften(polygons, points)
+
+        if not array_out:
+            return out
+
+        out['soft_top2_label'] = out['soft_top2_label'].astype(np.uint8)
+
+        shapes_ = out[['geometry', 'soft_top2_label']].values.tolist()
+        out = rasterio.features.rasterize(shapes_,
+                                          out_shape=shape,
+                                          fill=0,  # fill value for background
+                                          out=None,
+                                          transform=transform,
+                                          all_touched=False,
+                                          # merge_alg=MergeAlg.replace,  # ... used is default
+                                          default_value=1,
+                                          dtype=rasterio.uint8
+                                          )
+        return out
+
+
 def homogenize(prediction: Union[str, rasterio.io.MemoryFile, rasterio.io.DatasetReader, np.ndarray],
                vector_data_path: str, affine: list, epsg: str = 'epsg:32633',
-               array_out: bool = False) -> Union[gpd.GeoDataFrame, np.ndarray]:
+               array_out: bool = False, type_: str = 'hard') -> Union[gpd.GeoDataFrame, np.ndarray]:
     """
-    Homogenize (polygonize) prediction using external vector data (LPIS)
+    Homogenize prediction using external vector data (LPIS)
 
     Parameters
     ----------
@@ -254,27 +393,33 @@ def homogenize(prediction: Union[str, rasterio.io.MemoryFile, rasterio.io.Datase
         affine transform of raster
     array_out: bool
         Whether to export homogenized prediction as numpy array
+    type_ : str
+        Type of processing / labels. Can be `hard` - final label is hard label based on hard labels of prediction
+                                            `soft` - return hard and soft label
     Returns
     -------
     gpd.GeoDataFrame or np.ndarray
     """
     if isinstance(prediction, rasterio.io.MemoryFile) or isinstance(prediction, rasterio.io.DatasetReader):
         bbox = prediction.bounds
-        affine = prediction.transform
+        transform = prediction.transform
         shape = prediction.shape[-2:]
         gdf = raster2polygon_layer(prediction)
+        points = raster2point_layer(prediction) if type_ == 'soft' else None
 
     elif isinstance(prediction, str):
         r = rasterio.open(prediction)
 
         bbox = r.bounds
-        affine = r.transform
+        transform = r.transform
         shape = r.shape[-2:]
         r.close()
 
         gdf = raster2polygon_layer(prediction)
+        points = raster2point_layer(prediction) if type_ == 'soft' else None
     elif isinstance(prediction, np.ndarray):
         gdf = prediction2polygon_layer(prediction, affine, epsg)
+        points = prediction2point_layer(prediction, affine, epsg) if type_ == 'soft' else None
         bb = gdf.total_bounds
         bbox = BoundingBox(*list(bb))
         shape = prediction.shape[-2:]
@@ -291,18 +436,47 @@ def homogenize(prediction: Union[str, rasterio.io.MemoryFile, rasterio.io.Datase
     # filtered_features = features.iloc[indices]
 
     filtered_features = filtered_features.reset_index()
+    filtered_features['area_polygon'] = filtered_features['geometry'].area
 
     merged = gpd.overlay(filtered_features, gdf, how='intersection')
     merged['area'] = merged['geometry'].area
 
-    cc = merged[merged['raster_val'] > 0.0].groupby('index', as_index=False)[['area']].max()
+    kk = merged.groupby(['index', 'raster_val'], as_index=False)[['area', 'area_polygon']].agg({'area': 'sum',
+                                                                                                'area_polygon': ['sum',
+                                                                                                                 'count']})
+    #cc = kk.groupby('index', as_index=False)[['area']].max()
+    cc = kk[(kk.raster_val > 0) | ((kk.raster_val == 0) & ((kk.area['sum'] / (kk.area_polygon['sum'] / kk.area_polygon['count'])) > 0.75))].groupby('index', as_index=False)[[('area', 'sum')]].max()
 
+    cc.columns = cc.columns.droplevel(1)
     gg = cc[['index', 'area']].merge(filtered_features[['index', 'geometry']], on='index', how='inner')
-    uu = gg[['area', 'index', 'geometry']].merge(merged[['area', 'raster_val']], on='area', how='inner')
+
+    kk.columns = kk.columns.droplevel(1)
+    uu = gg[['area', 'index', 'geometry']].merge(kk[['area', 'raster_val']], on='area', how='inner')
+
     tt = gpd.GeoDataFrame(uu)
+    if type_ == 'hard':
+        if array_out:
+            shapes_ = tt[['geometry', 'raster_val']].values.tolist()
+
+            out = rasterio.features.rasterize(shapes_,
+                                              out_shape=shape,
+                                              fill=0,  # fill value for background
+                                              out=None,
+                                              transform=transform,
+                                              all_touched=False,
+                                              # merge_alg=MergeAlg.replace,  # ... used is default
+                                              default_value=1,
+                                              dtype=rasterio.uint8
+                                              )
+
+            return out
+        else:
+            return tt[['geometry', 'raster_val']]
+
+    out = soften(tt, points)
 
     if array_out:
-        shapes_ = tt[['geometry', 'raster_val']].values.tolist()
+        shapes_ = out[['geometry', 'soft_label']].values.tolist()
 
         out = rasterio.features.rasterize(shapes_,
                                           out_shape=shape,
@@ -315,9 +489,7 @@ def homogenize(prediction: Union[str, rasterio.io.MemoryFile, rasterio.io.Datase
                                           dtype=rasterio.uint8
                                           )
 
-        return out
-    else:
-        return tt[['geometry', 'raster_val']]
+    return out
 
 
 def homogenize_boundaries(prediction: np.ndarray, affine: list,
