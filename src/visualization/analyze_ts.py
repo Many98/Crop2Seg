@@ -1,3 +1,5 @@
+import json
+
 import torch
 
 from src.helpers.dataset_creator import DatasetCreator
@@ -6,10 +8,13 @@ import seaborn as sns
 import numpy as np
 from datetime import datetime
 import pandas as pd
+from glob import glob
+import os
+import json
 
 from src.visualization.visualize import plot_rgb, plot_lulc, plot_ndvi
 from src.learning.utils import get_dilated
-from src.datasets.s2_ts_cz_crop import crop_cmap
+from src.datasets.s2_ts_cz_crop import crop_cmap, labels_super_short_2
 
 
 # https://eos.com/industries/agriculture/ndre/
@@ -135,6 +140,88 @@ def plot_profile(ndvi_ts: np.ndarray, dates: list, c: list, segmentation: np.nda
     plt.ylim(-0.1, 1)
     plt.legend()
 
+    return fig
+
+
+def load_(what: str = 'overall', how: str = 'until', path: str=''):
+    dates = ['jan', 'feb', 'mar', 'april', 'may', 'jun', 'jul', 'aug', 'sep', 'oct']
+
+    search_string = ''
+    if what == 'overall':
+        search_string = 'all_overall'
+    elif what == 'class':
+        search_string = 'all_per_class'
+    else:
+        raise Exception('unknown what parameter')
+    search_string += '_'
+    if how == 'until':
+        search_string += 'until_'
+    elif how == 'from':
+        search_string += 'from_'
+    elif how == 'month':
+        pass
+    else:
+        raise Exception('unknown how parameter')
+
+    values = []
+    for d in dates:
+        s = search_string + d + '.json' if how == 'month' else search_string + d + '*.json'
+        try:
+            p = glob(os.path.join(path, s))[0]
+            with open(p) as f:
+                kk = json.load(f)
+                if what == 'overall':
+                    values.append(kk['MACRO_IoU'])
+                elif what == 'class':
+                    values.append([kk[str(c)]['IoU'] for c in range(14)])
+        except:
+            if what == 'overall':
+                values.append(np.nan)
+            elif what == 'class':
+                values.append([np.nan for c in range(14)])
+
+    if how == 'until':
+
+        if what == 'overall':
+            with open(os.path.join(path, 'all_overall_full.json')) as f:
+                kk = json.load(f)
+                values.append(kk['MACRO_IoU'])
+        elif what == 'class':
+            with open(os.path.join(path, 'all_per_class_full.json')) as f:
+                kk = json.load(f)
+                values.append([kk[str(c)]['IoU'] for c in range(14)])
+    else:
+        if what == 'overall':
+            values.append(np.nan)
+        elif what == 'class':
+            values.append([np.nan for c in range(14)])
+
+    return np.array(values) * 100
+
+
+def plot_time_dependence(what: str = 'overall', how: str = 'until', path: str='', classes: list = [3, 4, 5, 6]):
+    """
+    auxiliary function
+    """
+    sns.set_style("whitegrid")
+    dates = ['20190101', '20190201','20190301', '20190401', '20190501', '20190601',
+             '20190701', '20190801', '20190901', '20191001', '20191101']
+    values = load_(what, how, path)
+    if what == 'overall':
+        values = values[None, ...]
+        classes = [0]
+    else:
+        values = values.T
+
+    date_index = pd.DatetimeIndex(data=np.array(dates)).values
+    fig, ax = plt.subplots()
+    for i in classes:
+        ax.plot(date_index, values[i], label=labels_super_short_2[i], marker='*')#, color=crop_cmap()[i])
+    ax.set_ylabel('mIoU')
+    plt.title(f'Cumulative metric - {"from 1.9.2018 " + how + " date" if how == "until" else how + " date until 1.11.2019"}')
+    plt.xticks(rotation=25)
+    if what == 'class':
+        plt.legend()
     return fig
 
 
