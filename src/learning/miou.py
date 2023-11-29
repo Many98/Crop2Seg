@@ -39,7 +39,7 @@ class ConfusionMatrix(Metric):
         if device == 'cpu':
             self.conf = np.ndarray((num_classes, num_classes), dtype=np.int64)
         else:
-            self.conf = torch.zeros((num_classes, num_classes)).cuda()
+            self.conf = torch.zeros((num_classes, num_classes)).to(device)
         self.normalized = normalized
         self.num_classes = num_classes
         self.device = device
@@ -50,7 +50,7 @@ class ConfusionMatrix(Metric):
         if self.device == 'cpu':
             self.conf.fill(0)
         else:
-            self.conf = torch.zeros(self.conf.shape).cuda()
+            self.conf = torch.zeros(self.conf.shape).to(self.device)
 
     def add(self, predicted, target):
         """Computes the confusion matrix
