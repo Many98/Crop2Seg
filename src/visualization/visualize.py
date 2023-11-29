@@ -5,6 +5,7 @@ import pandas as pd
 import os
 import matplotlib.patches as mpatches
 from skimage.exposure import adjust_log
+import math
 
 # ### small boiler plate to add src to sys path
 import sys
@@ -450,5 +451,185 @@ def plot_ndvi(ndvi: np.ndarray):
     ax.axes.xaxis.set_visible(False)
 
     return fig
+
+
+# --------------------------------
+# REALIABILITY PLOT (taken from https://github.com/torrvision/focal_calibration)
+
+COUNT = 'count'
+CONF = 'conf'
+ACC = 'acc'
+BIN_ACC = 'bin_acc'
+BIN_CONF = 'bin_conf'
+
+
+def _bin_initializer(bin_dict, num_bins=10):
+    for i in range(num_bins):
+        bin_dict[i][COUNT] = 0
+        bin_dict[i][CONF] = 0
+        bin_dict[i][ACC] = 0
+        bin_dict[i][BIN_ACC] = 0
+        bin_dict[i][BIN_CONF] = 0
+
+
+def _populate_bins(confs, preds, labels, num_bins=10):
+    bin_dict = {}
+    for i in range(num_bins):
+        bin_dict[i] = {}
+    _bin_initializer(bin_dict, num_bins)
+    num_test_samples = len(confs)
+
+    for i in range(0, num_test_samples):
+        confidence = confs[i]
+        prediction = preds[i]
+        label = labels[i]
+        binn = int(math.ceil(((num_bins * confidence) - 1)))
+        bin_dict[binn][COUNT] = bin_dict[binn][COUNT] + 1
+        bin_dict[binn][CONF] = bin_dict[binn][CONF] + confidence
+        bin_dict[binn][ACC] = bin_dict[binn][ACC] + \
+                              (1 if (label == prediction) else 0)
+
+    for binn in range(0, num_bins):
+        if (bin_dict[binn][COUNT] == 0):
+            bin_dict[binn][BIN_ACC] = 0
+            bin_dict[binn][BIN_CONF] = 0
+        else:
+            bin_dict[binn][BIN_ACC] = float(
+                bin_dict[binn][ACC]) / bin_dict[binn][COUNT]
+            bin_dict[binn][BIN_CONF] = bin_dict[binn][CONF] / \
+                                       float(bin_dict[binn][COUNT])
+    return bin_dict
+
+
+def reliability_plot(confs, preds, labels, num_bins=15):
+    '''
+    Method to draw a reliability plot from a model's predictions and confidences.
+    '''
+    bin_dict = _populate_bins(confs, preds, labels, num_bins)
+    bns = [(i / float(num_bins)) for i in range(num_bins)]
+    y = []
+    for i in range(num_bins):
+        y.append(bin_dict[i][BIN_ACC])
+    fig = plt.figure(figsize=(10, 8))  # width:20, height:3
+    plt.bar(bns, bns, align='edge', width=0.05, color='pink', label='Expected')
+    plt.bar(bns, y, align='edge', width=0.05,
+            color='blue', alpha=0.2, label='Actual')
+    plt.ylabel('Accuracy')
+    plt.xlabel('Confidence')
+    plt.legend()
+    return fig
+
+
+def bin_strength_plot(confs, preds, labels, num_bins=15):
+    '''
+    Method to draw a plot for the number of samples in each confidence bin.
+    '''
+    bin_dict = _populate_bins(confs, preds, labels, num_bins)
+    bns = [(i / float(num_bins)) for i in range(num_bins)]
+    num_samples = len(labels)
+    y = []
+    for i in range(num_bins):
+        n = (bin_dict[i][COUNT] / float(num_samples)) * 100
+        y.append(n)
+    fig = plt.figure(figsize=(10, 8))  # width:20, height:3
+    plt.bar(bns, y, align='edge', width=0.05,
+            color='blue', alpha=0.5, label='Percentage samples')
+    plt.ylabel('Percentage of samples')
+    plt.xlabel('Confidence')
+    return fig
+
+
+# --------------------------------
+# auxiliary plotting functions for Crop2Seg project
+
+def plot_conf_matrix(path, labels: list):
+    """
+    Plots confusion matrix stored at `path` in .pickle format
+    """
+    import pickle
+    with open(path, 'rb') as f:
+        m = pickle.load(f)
+
+    enc_labels = [i for i in range(15)]
+    return plot_cm(m, labels, enc_labels, normalize=True)
+
+
+def plot_learning(path):
+    """
+    Plots learning history stored at path in .json format
+    """
+    sns.set_theme()
+    history = pd.read_json(path).T
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
+
+    ax1.plot(history['train_loss'])
+    ax1.plot(history['val_loss'], linestyle='dashed')
+
+    #ax1.set_title('Loss function of model')  # ax1.set_title('Účelová funkcia modelu')
+    ax1.set_ylabel('Loss')  # ax1.set_ylabel('Hodnota')
+    ax1.set_xlabel('Epoch')  # ax1.set_xlabel('Epocha')
+    ax1.legend(['train', 'val'], loc='upper right')
+
+    ax2.plot(history['train_accuracy'])
+    ax2.plot(history['val_accuracy'], linestyle='dashed')
+
+    ax2.plot(history['train_IoU'])
+    ax2.plot(history['val_IoU'], linestyle='dashed')
+
+    #ax2.set_title('Metrics')  # ax2.set_title('Metriky modelu')
+    ax2.set_ylabel('Value')  # ax2.set_ylabel('Hodnota')
+    ax2.set_xlabel('Epoch')  # ax2.set_xlabel('Epocha')
+    ax2.legend(['train acc', 'val acc',
+                'train mIoU', 'val mIoU'], loc='upper left')
+    plt.tight_layout()
+
+    return fig
+
+
+def plot_metrics_per_class(path: str, labels: list):
+    """
+    Plots per class metrics stored at `path` in .json format
+    """
+    sns.set_theme()
+    metrics = pd.read_json(path)
+
+    rec = metrics.loc['Recall'].to_list() + [0]
+    prec = metrics.loc['Precision'].to_list() + [0]
+    iou = metrics.loc['IoU'].to_list() + [0]
+
+    barWidth = 0.2
+    fig = plt.subplots(figsize=(20, 9))
+
+    # Set position of bar on X axis
+    br1 = np.arange(len(iou))
+    br2 = [x + barWidth for x in br1]
+    br3 = [x + barWidth for x in br2]
+
+    # Make the plot
+    plt.bar(br1, iou, color='red', width=barWidth,
+            edgecolor='grey', label='IoU')
+    plt.bar(br2, prec, color='green', width=barWidth,
+            edgecolor='grey', label='Precision')
+    plt.bar(br3, rec, color='purple', width=barWidth,
+            edgecolor='grey', label='Recall')
+
+    # Adding Xticks
+    plt.xlabel('Class', fontweight='bold', fontsize=10)
+    plt.ylabel('Value', fontweight='bold', fontsize=15)
+    labels[-1] = 'Boundary'
+    plt.xticks([r + barWidth for r in range(len(iou))],
+               labels[:-1])
+    plt.xticks(rotation=25, fontsize=10, fontweight='bold')
+    plt.yticks(fontsize=10, fontweight='bold')
+
+    plt.title('Metrics per class', fontweight='bold', fontsize=14)
+
+    #plt.plot([i for i in range(0, 15)], [0.5 for _ in range(0, 15)], linestyle='--', color='black',
+    #         label='Reasonable IoU (>0.5)')
+
+    plt.legend()
+    return fig
+
 
 # TODO get some inspiration -> https://datavizproject.com/
