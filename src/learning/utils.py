@@ -6,8 +6,12 @@ import time
 
 import numpy as np
 import torch
+from torch import nn
 import torch.nn.functional as F
 import torchnet as tnt
+
+from thop import profile
+from fvcore.nn import FlopCountAnalysis, flop_count_table
 
 # ### small boiler plate to add src to sys path
 import sys
@@ -18,7 +22,7 @@ root = str(file).split('src')[0]
 sys.path.append(root)
 # --------------------------------------
 
-
+from src.utils import get_ntrainparams
 from src.learning.metrics import confusion_matrix_analysis
 from src.learning.miou import IoU
 from src.helpers.postprocess import homogenize
@@ -31,7 +35,9 @@ from src.backbones.convlstm import ConvLSTM_Seg
 from src.backbones.recunet import RecUNet
 from src.backbones.fpn import FPNConvLSTM
 from src.backbones.wtae import WTAE
-from src.backbones.etae import ETAE
+from src.backbones.unet import Unet_naive
+
+from einops import rearrange
 
 from src.learning.focal_loss import FocalCELoss
 
@@ -70,36 +76,6 @@ def get_model(config):
             use_doy=config.use_doy,
             add_linear=config.add_linear,
             add_boundary_loss=config.add_boundary_loss
-        )
-    if config.model == "etae":
-        model = ETAE(
-            input_dim=config.input_dim,  # number of input channels
-            encoder_widths=config.encoder_widths,
-            decoder_widths=config.decoder_widths,
-            out_conv=config.out_conv,
-            str_conv_k=config.str_conv_k,
-            str_conv_s=config.str_conv_s,
-            str_conv_p=config.str_conv_p,
-            agg_mode=config.agg_mode,
-            encoder_norm=config.encoder_norm,
-            n_head=config.n_head,
-            d_model=config.d_model,
-            d_k=config.d_k,
-            encoder=False,
-            return_maps=False,
-            pad_value=config.pad_value,
-            padding_mode=config.padding_mode,
-            # ------------------------------
-            # From here starts added arguments
-            conv_type=config.conv_type,
-            use_mbconv=config.use_mbconv,
-            add_squeeze_excit=config.add_squeeze,
-            use_abs_rel_enc=config.use_abs_rel_enc,
-            num_queries=config.num_queries,
-            use_doy=config.use_doy,
-            seg_model=config.seg_model,
-            temp_model=config.temp_model,
-            add_linear=config.add_linear
         )
     if config.model == "wtae":
         model = WTAE(
@@ -158,21 +134,30 @@ def get_model(config):
             use_doy=config.use_doy,
             add_linear=config.add_linear
         )
+    elif config.model == "unet_naive":
+        model = Unet_naive(
+            input_dim=config.input_dim,  # number of input channels
+            temporal_length=config.max_temp,
+            #encoder_widths=config.encoder_widths,
+            #decoder_widths=config.decoder_widths,
+            #out_conv=config.out_conv,
+            str_conv_k=config.str_conv_k,
+            str_conv_s=config.str_conv_s,
+            str_conv_p=config.str_conv_p,
+            agg_mode=config.agg_mode,
+            encoder=False,
+            return_maps=False,
+            pad_value=config.pad_value,
+            padding_mode=config.padding_mode,
+            # ------------------------------
+            # From here starts added arguments
+            conv_type=config.conv_type,
+            use_mbconv=config.use_mbconv,
+            add_squeeze_excit=config.add_squeeze
+        )
     elif config.model == "unet3d":
         model = UNet3D(
             in_channel=config.input_dim, n_classes=config.num_classes, pad_value=config.pad_value
-        )
-    elif config.model == "fpn":
-        model = FPNConvLSTM(
-            input_dim=config.input_dim,
-            num_classes=config.num_classes,
-            inconv=[32, 64],
-            n_levels=4,
-            n_channels=64,
-            hidden_size=88,
-            input_shape=(128, 128),
-            mid_conv=True,
-            pad_value=config.pad_value,
         )
     elif config.model == "convlstm":
         model = ConvLSTM_Seg(
@@ -203,23 +188,6 @@ def get_model(config):
             input_size=128,
             encoder_norm="group",
             hidden_dim=64,
-            encoder=False,
-            padding_mode="zeros",
-            pad_value=0,
-        )
-    elif config.model == "buconvlstm":
-        model = RecUNet(
-            input_dim=config.input_dim,
-            encoder_widths=[64, 64, 64, 128],
-            decoder_widths=[32, 32, 64, 128],
-            out_conv=[32, 20],
-            str_conv_k=4,
-            str_conv_s=2,
-            str_conv_p=1,
-            temporal="lstm",
-            input_size=128,
-            encoder_norm="group",
-            hidden_dim=30,
             encoder=False,
             padding_mode="zeros",
             pad_value=0,
@@ -295,7 +263,6 @@ def iterate(
         )
 
         criterion_b = FocalCELoss(gamma=2.0)
-
     t_start = time.time()
     for i, batch in enumerate(data_loader):
         if device is not None:
@@ -361,17 +328,6 @@ def iterate(
             pred_ = out.topk(2, dim=1).indices
             if config.add_boundary_loss:
                 pred_b = out_b.argmax(dim=1)
-
-            if config.get_affine:
-                pp = []
-                for p, a in zip(pred, affine):
-                    p = homogenize(p.detach().cpu().numpy(),
-                                   vector_data_path=AGRI_PATH_DATASET,
-                                   affine=a.cpu().numpy(), array_out=True)
-                    pp.append(torch.from_numpy(p))
-
-                pred = torch.stack(pp).to('cuda')
-
 
         # Specify test region default is all
         if test_region in ['boundary', 'interior']:
@@ -531,3 +487,76 @@ def overall_performance(config, fold=None, name="", top2=False):
 
     with open(os.path.join(config.res_dir, f"{name}per_class{'_top2' if top2 else ''}.json"), "w") as file:
         file.write(json.dumps(per_class, indent=4))
+
+
+def model_characteristics(model: nn.Module, device: str = 'cuda'):
+    """
+    Function for estimation of model characteristics like  FLOPs, MACs and num of params.
+    Sample is of shape B x T x C x H x W = 1 x 30 x 10 x 128 x 128
+    Parameters
+    ----------
+    model: nn.Module
+        torch.nn.Module object
+    device: str
+        Name of device. Can be `cpu`, `cuda`
+    """
+    model = model.to(device)
+
+    sample_data = torch.randn(1, 30, 10, 128, 128).to(device)
+    sample_batch_positions = torch.randint(0, 30, (1, 30)).to(device)
+
+    print(f'Number of trainable parameters is: {get_ntrainparams(model)}')
+
+    print('\n\n\n')
+
+    macs, params = profile(model, inputs=(sample_data, sample_batch_positions))
+    print(f'| module | # parameters      | #macs     |\n'
+          f'| model  |  {params / 1e6}M         | {macs / 1e9}G')
+
+    print('\n\n\n')
+
+    flops = FlopCountAnalysis(model, (sample_data, sample_batch_positions))
+
+    print(flop_count_table(flops))
+
+
+def inference_time(model: nn.Module, device: str = 'cuda', repetitions: int = 100):
+    """
+    Function for estimation of model inference time i.e. time of one forward pass
+    Sample is of shape B x T x C x H x W = 1 x 30 x 10 x 128 x 128
+    Parameters
+    ----------
+    model: nn.Module
+        torch.nn.Module object
+    device: str
+        Name of device. Can be `cpu`, `cuda`
+    repetitions: int
+        Number of repetitions
+    """
+    model = model.to(device)
+
+    sample_data = torch.randn(1, 30, 10, 128, 128).to(device)
+    sample_batch_positions = torch.randint(0, 30, (1, 30)).to(device)
+
+    # INIT LOGGERS
+    starter, ender = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+    timings = torch.zeros((repetitions, 1))
+
+    # GPU-WARM-UP
+    for _ in range(10):
+        _ = model(sample_data, sample_batch_positions)
+
+    # MEASURE PERFORMANCE
+    with torch.no_grad():
+        for rep in range(repetitions):
+            starter.record()
+            _ = model(sample_data, sample_batch_positions)
+            ender.record()
+            # WAIT FOR GPU SYNC
+            torch.cuda.synchronize()
+            curr_time = starter.elapsed_time(ender)
+            timings[rep] = curr_time
+
+    mean_syn = torch.sum(timings) / repetitions
+    std_syn = torch.std(timings)
+    print(f'Average time of forward pass is {mean_syn} +- {std_syn} ms')
