@@ -181,9 +181,9 @@ class Unet_naive(nn.Module):
             self,
             input_dim,
             temporal_length=61,
-            encoder_widths=[8, 8, 8, 16],
-            decoder_widths=[4, 4, 8, 16],
-            out_conv=[4, 20],
+            encoder_widths=(8, 8, 8, 16),
+            decoder_widths=(4, 4, 8, 16),
+            out_conv=(4, 20),
             str_conv_k=4,
             str_conv_s=2,
             str_conv_p=1,
@@ -233,7 +233,7 @@ class Unet_naive(nn.Module):
         self.encoder_widths = encoder_widths
         decoder_widths = [i * temporal_length // 2 for i in decoder_widths]
         self.decoder_widths = decoder_widths
-        out_conv[0] = out_conv[0] * temporal_length
+
         self.temporal_length = temporal_length
         self.enc_dim = (
             decoder_widths[0] if decoder_widths is not None else encoder_widths[0]
@@ -311,14 +311,15 @@ class Unet_naive(nn.Module):
             for i in range(self.n_stages - 1, 0, -1)
         )
 
-        self.out_conv = out_conv_block(nkernels=[decoder_widths[0]] + out_conv, padding_mode=padding_mode,
+        self.out_conv = out_conv_block(nkernels=[decoder_widths[0]] + [out_conv[0] * temporal_length, out_conv[1]],
+                                       padding_mode=padding_mode,
                                        conv_type="2d",
                                        add_squeeze=False)
 
     def forward(self, input, *args, **kwargs):
-        if input.shape[1] < self.temporal_length:
-            input = torch.cat([input, torch.zeros(input.shape[0], self.temporal_length - input.shape[1],
-                                                  *input.shape[2:]).to(input.device)], dim=1)
+        #if input.shape[1] < self.temporal_length:
+        #    input = torch.cat([input, torch.zeros(input.shape[0], self.temporal_length - input.shape[1],
+        #                                          *input.shape[2:]).to(input.device)], dim=1)
         out = self.in_conv.smart_forward(rearrange(input, 'b t c h w -> b (t c) h w'))
 
         feature_maps = [out]
