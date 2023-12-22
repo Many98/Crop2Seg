@@ -39,9 +39,9 @@ labels_short = ['Background 0', 'Grassland 1', 'Fruit & vegetable 2', 'Summer ce
                 'Winter cereals 4', 'Rapeseed 5', 'Maize 6', 'Forage crops 7', 'Sugar beet 8', 'Flax & Hemp 9',
                 'Permanent fruit 10', 'Hopyards 11', 'Vineyards 12', 'Other crops 13', 'Not classified 14']
 
-labels_super_short = ['Background', 'Grassland', 'Fruit_vegetable', 'Summer_cereals',
-                      'Winter_cereals', 'Rapeseed', 'Maize', 'Forage crops', 'Sugar_beet', 'Flax_Hemp',
-                      'Permanent_fruit', 'Hopyards', 'Vineyards', 'Other_crops', 'Not_classified', 'Boundary']
+labels_super_short = ['Background', 'Grassland', 'Fruit/vegetable', 'Summer cereals',
+                      'Winter cereals', 'Rapeseed', 'Maize', 'Forage crops', 'Sugar beet', 'Flax/Hemp',
+                      'Permanent fruit', 'Hopyards', 'Vineyards', 'Other crops', 'Not classified', 'Boundary']
 
 labels_super_short_2 = ['Background', 'Grassland', 'Fruit/vegetable', 'Summer cereals',
                         'Winter cereals', 'Rapeseed', 'Maize', 'Forage crops', 'Sugar beet', 'Flax/Hemp',
@@ -464,42 +464,15 @@ class S2TSCZCropDataset(tdata.Dataset):
         if self.transform and self.set_type == 'train':
             data, target = self.transform(data, target)  # 4d tensor T x C x H x W, 2d tensor H x W
 
+        # TEMPORAL DROPOUT
         if self.set_type == 'train' and self.temporal_dropout > 0.:
-            ps = np.random.sample()
-            '''
-            if ps < 0.4:
-                # remove acquisition with probability of temporal_dropout
-                probas = torch.rand(data.shape[0])
-                drop = torch.where(probas > self.temporal_dropout)[0]
-                data = data[drop]
-                dates = dates[drop]
-                if self.use_abs_rel_enc:
-                    dates2 = dates2[drop]
-            elif ps > 0.6:
-                # shorten time-series from right
-                to_idx = np.random.randint(data.shape[0] // 2, data.shape[0])
-                data = data[:to_idx]
-                dates = dates[:to_idx]
-                if self.use_abs_rel_enc:
-                    dates2 = dates2[:to_idx]
-            # there is 20% probability  than temporal drop nor shortening of ts will be performed
-            
-            '''
-            if ps < 0.6:
-                # remove acquisition with probability of temporal_dropout
-                probas = torch.rand(data.shape[0])
-                drop = torch.where(probas > self.temporal_dropout)[0]
-                data = data[drop]
-                dates = dates[drop]
-                if self.use_abs_rel_enc:
-                    dates2 = dates2[drop]
-            else:
-                # shorten time-series from right
-                to_idx = np.random.randint(6 * data.shape[0] // 7, data.shape[0])
-                data = data[:to_idx]
-                dates = dates[:to_idx]
-                if self.use_abs_rel_enc:
-                    dates2 = dates2[:to_idx]
+            # remove acquisition with probability of temporal_dropout
+            probas = torch.rand(data.shape[0])
+            drop = torch.where(probas > self.temporal_dropout)[0]
+            data = data[drop]
+            dates = dates[drop]
+            if self.use_abs_rel_enc:
+                dates2 = dates2[drop]
 
         if self.use_abs_rel_enc:
             if self.get_affine:
