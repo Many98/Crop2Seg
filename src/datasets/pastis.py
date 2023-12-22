@@ -2,6 +2,8 @@ import json
 import os
 from datetime import datetime
 import logging
+import matplotlib
+from matplotlib.colors import ListedColormap
 
 import geopandas as gpd
 import numpy as np
@@ -10,6 +12,28 @@ import torch
 import torch.utils.data as tdata
 
 logging.getLogger().setLevel(logging.INFO)
+
+labels = ['Background 0', 'Meadow 1', 'Soft winter wheat 2', 'Corn 3',
+          'Winter barley 4', 'Winter rapeseed 5', 'Spring barley 6', 'Sunflower 7', 'Grapevine 8', 'Beet 9',
+          'Winter triticale 10', 'Winter durum wheat 11', 'Fruits, vegetables, flowers 12', 'Potatoes 13',
+          'Leguminous fodder 14', 'Soybeans 15', 'Orchard 16', 'Mixed cereals 17', 'Sorghum 18', 'Void label 19']
+
+labels_super_short = ['Background', 'Meadow', 'Winter wheat (s.)', 'Corn',
+                      'Winter barley', 'Winter rapeseed', 'Spring barley', 'Sunflower', 'Grapevine', 'Beet',
+                      'Winter triticale', 'Winter wheat (d.)', 'Fruit/vegetable/flower', 'Potatoes',
+                      'Leguminous fodder', 'Soybeans', 'Orchard', 'Mixed cereals', 'Sorghum', 'Void']
+
+
+def crop_cmap():
+    """
+    Auxiliary function to return dictionary with color map used for visualization
+    of classes in S2TSCZCrop dataset
+    """
+    cm = matplotlib.cm.get_cmap('tab20')
+    def_colors = cm.colors
+    colors = [[0, 0, 0]] + [list(def_colors[i]) for i in range(1, 19)] + [[1, 1, 1]]
+
+    return {k: v + [1] for k, v in enumerate(colors)}
 
 
 class PASTISDataset(tdata.Dataset):
@@ -343,6 +367,9 @@ class PASTISDataset(tdata.Dataset):
 
         if self.use_abs_rel_enc:
             dates2 = dates2['S2']
+
+        if self.transform and self.set_type == 'train':
+            data, target = self.transform(data, target)  # 4d tensor T x C x H x W, 2d tensor H x W
 
         if self.set_type == 'train' and self.temporal_dropout > 0.:
             # remove acquisition with probability of temporal_dropout
