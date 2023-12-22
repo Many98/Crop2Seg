@@ -338,8 +338,10 @@ def plot_cm(cm, labels, encoded_labels, normalize=True, cmap='plasma'):
     else:
         cm2 = cm
     cmm = np.round(cm2, decimals=2)
-    ax = sns.heatmap(cm2, cmap=cmap, xticklabels=encoded_labels, yticklabels=labels, ax=ax, annot=cmm)
+    #ax = sns.heatmap(cm2, cmap=cmap, xticklabels=encoded_labels, yticklabels=labels, ax=ax, annot=cmm)
+    ax = sns.heatmap(cm2, cmap=cmap, xticklabels=labels, yticklabels=labels, ax=ax, annot=cmm)
     ax.tick_params(axis='y', labelrotation=45, labelsize=10)
+    ax.tick_params(axis='x', labelrotation=45, labelsize=10)
     ax.set_ylabel('True label')
     ax.set_xlabel('Predicted label')
     ax.yaxis.set_label_position("right")
@@ -358,7 +360,7 @@ def plot_proba_mask(proba_mask):
     -------
     returns matplotlib.pyplot.Figure object
     """
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(figsize=(9, 7))
     sns.heatmap(proba_mask, xticklabels=False, yticklabels=False, annot=False, ax=ax)
     ax.set_title(f'Confidence map')
 
@@ -434,7 +436,7 @@ def plot_rgb(data):
 def plot_ndvi(ndvi: np.ndarray):
     """
     plot ndvi spectral index
-     Parameters
+    Parameters
     ----------
     ndvi: np.ndarray
         2D array [H x W]
@@ -551,14 +553,14 @@ def plot_conf_matrix(path, labels: list):
         m = pickle.load(f)
 
     enc_labels = [i for i in range(15)]
-    return plot_cm(m, labels, enc_labels, normalize=True)
+    return plot_cm(m, labels, labels, normalize=True)
 
 
 def plot_learning(path):
     """
     Plots learning history stored at path in .json format
     """
-    sns.set_theme()
+    sns.set_style("whitegrid")
     history = pd.read_json(path).T
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
@@ -591,7 +593,7 @@ def plot_metrics_per_class(path: str, labels: list):
     """
     Plots per class metrics stored at `path` in .json format
     """
-    sns.set_theme()
+    sns.set_style("whitegrid")
     metrics = pd.read_json(path)
 
     rec = metrics.loc['Recall'].to_list() + [0]
@@ -615,11 +617,66 @@ def plot_metrics_per_class(path: str, labels: list):
             edgecolor='grey', label='Recall')
 
     # Adding Xticks
-    plt.xlabel('Class', fontweight='bold', fontsize=10)
-    plt.ylabel('Value', fontweight='bold', fontsize=15)
-    labels[-1] = 'Boundary'
+    plt.xlabel('Class', fontweight='bold', fontsize=12)
+    plt.ylabel('Value', fontweight='bold', fontsize=12)
+    #labels[-1] = 'Boundary'
     plt.xticks([r + barWidth for r in range(len(iou))],
-               labels[:-1])
+               labels)
+    plt.xticks(rotation=25, fontsize=10, fontweight='bold')
+    plt.yticks(fontsize=10, fontweight='bold')
+
+    plt.title('Metrics per class', fontweight='bold', fontsize=14)
+
+    #plt.plot([i for i in range(0, 15)], [0.5 for _ in range(0, 15)], linestyle='--', color='black',
+    #         label='Reasonable IoU (>0.5)')
+
+    plt.legend()
+    return fig
+
+
+def plot_metrics_per_class_models(metric_paths: list, model_names: list, colors: list,
+                                  labels: list, barWidth=0.2):
+    """
+    Plots per class metrics for models
+    Parameters
+    ----------
+    metric_paths: list
+        List of strings defining absolute path to per class metrics of models
+    model_names: list
+        List of strings representing names of models
+    colors: list
+        List of color names used for distinguishing models in legend
+    labels: list
+        List of labels for every crop/class
+    barWidth: float
+        width of bar used in graph
+    Returns
+    -------
+    returns matplotlib.pyplot.Figure object
+    """
+    sns.set_style("whitegrid")
+    metrics = [pd.read_json(path) for path in metric_paths]
+
+    vals = [m.loc['IoU'].to_list() + [0] for m in metrics]
+
+    fig = plt.subplots(figsize=(22, 12))
+
+    # Set position of bar on X axis
+    brs = [np.arange(len(vals[0]))]
+    for i in range(len(model_names) - 1):
+        brs.append([x + barWidth for x in brs[-1]])
+
+    # Make the plot
+    for i in range(len(vals)):
+        plt.bar(brs[i], vals[i], color=colors[i], width=barWidth,
+                edgecolor='grey', label=model_names[i])
+
+    # Adding Xticks
+    plt.xlabel('Class', fontweight='bold', fontsize=12)
+    plt.ylabel('mIoU', fontweight='bold', fontsize=12)
+    #labels[-1] = 'Boundary'
+    plt.xticks([r + barWidth for r in range(len(vals[0]))],
+               labels)
     plt.xticks(rotation=25, fontsize=10, fontweight='bold')
     plt.yticks(fontsize=10, fontweight='bold')
 
