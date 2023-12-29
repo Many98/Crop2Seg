@@ -1,3 +1,14 @@
+# ### small boiler plate to add src to sys path
+import os
+import sys
+from pathlib import Path
+
+file = Path(__file__).resolve()
+root = str(file).split('Crop2Seg')[0]
+sys.path.append(root)
+os.chdir(os.path.join(root, 'Crop2Seg'))
+# --------------------------------------
+
 from streamlit_option_menu import option_menu
 
 import streamlit as st
@@ -5,7 +16,6 @@ import streamlit as st
 from src.webapp.home import home
 from src.webapp.postprocess import cropmap
 from src.webapp.get_data import get_info, get_ts, generate_grid, get_LPIS
-
 
 st.set_page_config(page_title="Crop2Seg", layout="wide")
 
@@ -129,14 +139,16 @@ if selected == 'Home':
     st.write(f'You selected year {st.session_state["year"]} with temporal window between', st.session_state['start_dt'],
              'and', st.session_state['end_dt'])
 
-    lpis_enabled = st.toggle('Enable LPIS', value=st.session_state['lpis_enabled'], help='Whether to use LPIS vector data and'
-                                                             ' perform homogenization of prediction. Note that'
-                                                             'LPIS data will be downloaded for selected year.')
+    lpis_enabled = st.toggle('Enable LPIS', value=st.session_state['lpis_enabled'],
+                             help='Whether to use LPIS vector data and'
+                                  ' perform homogenization of prediction. Note that'
+                                  'LPIS data will be downloaded for selected year.')
     st.session_state['lpis_enabled'] = lpis_enabled
 
-    cache_enabled = st.toggle('Enable cache', value=st.session_state['cache_enabled'], help='Whether to cache all obtained data.'
-                                                               'It includes all Sentinel-2 tiles and LPIS data.'
-                                                               'Otherwise all data are deleted.')
+    cache_enabled = st.toggle('Enable cache', value=st.session_state['cache_enabled'],
+                              help='Whether to cache all obtained data.'
+                                   'It includes all Sentinel-2 tiles and LPIS data.'
+                                   'Otherwise all data are deleted.')
     st.session_state['cache_enabled'] = cache_enabled
 
     make_prediction = st.button('Predict crops', help='Perform crop type prediction for selected patch within'
@@ -157,7 +169,7 @@ if selected == 'Home':
         st.session_state['patch_error'] = False
         with st.status("Downloading Sentinel-2 time-series data...", expanded=True) as status:
             st.write("Extracting patch...")
-            #tilename, patch_id, patch_transform, patch_bounds = get_info(x=out[0], y=out[1])
+            # tilename, patch_id, patch_transform, patch_bounds = get_info(x=out[0], y=out[1])
             tilename, patch_bounds = get_info(st.session_state['patch'])
             st.write("Retrieving data...")
             '''
