@@ -1,107 +1,12 @@
-from streamlit_option_menu import option_menu
 
 import leafmap.foliumap as leafmap
-from folium import LatLngPopup, Marker
-from streamlit_folium import st_folium
-
-
-import os
+from folium import LatLngPopup
+from shapely.geometry import Point
 import geopandas as gpd
 import streamlit as st
 
-
-def save_uploaded_file(file_content, file_name):
-    """
-    Save the uploaded file to a temporary directory
-    """
-    import tempfile
-    import os
-    import uuid
-
-    _, file_extension = os.path.splitext(file_name)
-    file_id = str(uuid.uuid4())
-    file_path = os.path.join(tempfile.gettempdir(), f"{file_id}{file_extension}")
-
-    with open(file_path, "wb") as file:
-        file.write(file_content.getbuffer())
-
-    return file_path
-
-
-def upload():
-
-    st.title("Upload Vector Data")
-
-    row1_col1, row1_col2 = st.columns([2, 1])
-    width = 950
-    height = 600
-
-    with row1_col2:
-
-        backend = st.selectbox(
-            "Select a plotting backend", ["folium", "kepler.gl", "pydeck"], index=2
-        )
-
-        if backend == "folium":
-            import leafmap.foliumap as leafmap
-        elif backend == "kepler.gl":
-            import leafmap.kepler as leafmap
-        elif backend == "pydeck":
-            import leafmap.deck as leafmap
-
-        url = st.text_input(
-            "Enter a URL to a vector dataset",
-            "https://github.com/giswqs/streamlit-geospatial/raw/master/data/us_states.geojson",
-        )
-
-        data = st.file_uploader(
-            "Upload a vector dataset", type=["geojson", "kml", "zip", "tab"]
-        )
-
-        container = st.container()
-
-        if data or url:
-            if data:
-                file_path = save_uploaded_file(data, data.name)
-                layer_name = os.path.splitext(data.name)[0]
-            elif url:
-                file_path = url
-                layer_name = url.split("/")[-1].split(".")[0]
-
-            with row1_col1:
-                if file_path.lower().endswith(".kml"):
-                    gpd.io.file.fiona.drvsupport.supported_drivers["KML"] = "rw"
-                    gdf = gpd.read_file(file_path, driver="KML")
-                else:
-                    gdf = gpd.read_file(file_path)
-                lon, lat = leafmap.gdf_centroid(gdf)
-                if backend == "pydeck":
-
-                    column_names = gdf.columns.values.tolist()
-                    random_column = None
-                    with container:
-                        random_color = st.checkbox("Apply random colors", True)
-                        if random_color:
-                            random_column = st.selectbox(
-                                "Select a column to apply random colors", column_names
-                            )
-
-                    m = leafmap.Map(center=(40, -100))
-                    # m = leafmap.Map(center=(lat, lon))
-                    m.add_gdf(gdf, random_color_column=random_column)
-                    st.pydeck_chart(m)
-
-                else:
-                    m = leafmap.Map(center=(lat, lon), draw_export=True)
-                    m.add_gdf(gdf, layer_name=layer_name)
-                    if backend == "folium":
-                        m.zoom_to_gdf(gdf)
-                    m.to_streamlit(width=width, height=height)
-
-        else:
-            with row1_col1:
-                m = leafmap.Map()
-                st.pydeck_chart(m)
+if 'patch' not in st.session_state:
+    st.session_state['patch'] = None
 
 
 def home():
@@ -114,17 +19,62 @@ def home():
     """
     )
 
-    m = leafmap.Map(locate_control=True, location=[50.08, 14.37], zoom=8)
+    grid = gpd.read_file('src/webapp/data/s2_grid/grid.shp')
+    grid = grid.reset_index()
+    try:
+        if st.session_state['patch'] != -1:
+            chosen = grid[grid['index'] == st.session_state['patch']]
+            opa = 0.8
+        else:
+            chosen = grid
+            opa = 0.0
+    except:
+        chosen = grid
+        opa = 0.0
+
+    m = leafmap.Map(locate_control=True, location=[49.78, 15.37], zoom=7)
     m.add_basemap("HYBRID")
     m.add_basemap("ROADMAP")
     m.add_child(LatLngPopup())
-    map = m.to_streamlit(height=500, bidirectional=True)
+
+    m.add_gdf(grid, layer_name=f'grid', zoom_to_layer=False, info_mode=None,
+              style={
+                  # "stroke": True,
+                  "color": "red",
+                  "opacity": .4,
+                  "fill": True,
+                  "fillOpacity": 0.0,
+              }
+              )
+    m.add_gdf(chosen, layer_name=f'patch', zoom_to_layer=False, info_mode=None,
+              style={
+                  # "stroke": True,
+                  "color": "green",
+                  "opacity": .0,
+                  "fill": True,
+                  "fillOpacity": opa,
+              }
+              )
+
+    map = m.to_streamlit(height=380, bidirectional=True)
 
     try:
         last_click = m.st_last_click(map)
     except:
-        last_click = None
-    if last_click is not None:
-        x, y = last_click[0], last_click[1]
+        last_click = st.session_state['last_click']
 
-        return x, y
+    if last_click is not None and last_click != st.session_state['last_click']:
+        st.session_state['last_click'] = last_click
+        x, y = last_click[0], last_click[1]
+        point = gpd.GeoDataFrame(geometry=[Point(y, x)], crs='EPSG:4326')
+        joined = grid.sjoin(point, how="inner")
+        try:
+            i = int(joined['index'].values[0])
+
+            if i != st.session_state['patch']:
+                st.session_state['patch_error'] = False
+                st.session_state['patch'] = i
+
+        except:
+            st.session_state['patch'] = None
+        st.rerun()
