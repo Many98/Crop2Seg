@@ -105,15 +105,19 @@ class DatasetCreator(object):
             self.segmentation_path = os.path.join(self.out_path, 'ANNOTATIONS')
             os.makedirs(self.segmentation_path, exist_ok=True)
 
-        self.features = None
+            self.features = None
 
-        if os.path.isfile(os.path.join(self.out_path, 'metadata.json')):
-            self.metadata = DatasetCreator.load_metadata(os.path.join(self.out_path, 'metadata.json'))
+            if os.path.isfile(os.path.join(self.out_path, 'metadata.json')):
+                self.metadata = DatasetCreator.load_metadata(os.path.join(self.out_path, 'metadata.json'))
+            else:
+                self.metadata = pd.DataFrame(
+                    {'ID_PATCH': [], 'ID_WITHIN_TILE': [], 'Background_Cover': [], 'Nodata_Cover': [],
+                     'Snow_Cloud_Cover': [], 'TILE': [], 'dates-S2': [], 'time-series_length': [],
+                     'crs': [], 'affine': [], 'Fold': [], 'Status': [], 'set': []})
         else:
             self.metadata = pd.DataFrame(
-                {'ID_PATCH': [], 'ID_WITHIN_TILE': [], 'Background_Cover': [], 'Nodata_Cover': [],
-                 'Snow_Cloud_Cover': [], 'TILE': [], 'dates-S2': [], 'time-series_length': [],
-                 'crs': [], 'affine': [], 'Fold': [], 'Status': [], 'set': []})
+                {'ID_PATCH': [], 'TILE': [], 'dates-S2': [], 'time-series_length': [],
+                 'crs': []})
 
     def __call__(self, tile_names=TILES, clouds=CLOUDS, dates=DATES, bounds=None, account=None, password=None,
                  *args, **kwargs):
@@ -132,7 +136,10 @@ class DatasetCreator(object):
         for id, tile_name in enumerate(tile_names):
 
             # sanity check ... skip if there are already exported metadata (it means data should be also exported)
-            if self.metadata[self.metadata['TILE'] == tile_name]['TILE'].shape[0] == 82 * 82:
+            if not self.for_inference and self.metadata[self.metadata['TILE'] == tile_name]['TILE'].shape[0] == 82 * 82:
+                continue
+            if self.for_inference and self.metadata[self.metadata['TILE'] == tile_name]['TILE'].shape[0] == 12 * 12:
+                st.write('Time series already generated ... Skipping')
                 continue
 
             if self.download:
@@ -140,6 +147,7 @@ class DatasetCreator(object):
                 self._download_timeseries(tile_name, clouds=clouds, dates=dates, account=account, password=password)
 
             logging.info(f"CONSTRUCTING TIME-SERIES FOR TILE: {tile_name}")
+            st.write(f'Processing rasters...')
             time_series, bbox, affine, crs, file_names, dates = self._load_s2(tile_name,
                                                                               bounds=bounds)  # T x (C+1) x H x W
             logging.info(f"LENGTH OF TIME-SERIES IS: {len(file_names)}")
@@ -178,6 +186,20 @@ class DatasetCreator(object):
                 logging.info(f"UPDATING METADATA FOR PATCHES OF TILE: {tile_name}")
                 self._update_metadata(id, tile_name, dates, crs, patches_affine, patches_bool_map, nodata_cover,
                                       snow_cloud_cover, background_cover)
+            else:
+                st.write(f'Generating patches...')
+                patches_s2, _ = self._patchify(time_series,
+                                               affine, patch_size=183)
+
+                logging.info(f"SAVING TIME-SERIES DATA FOR TILE: {tile_name}")
+                st.write(f'Saving time series... {patches_s2.shape} ')
+                patches_bool_map = np.ones((patches_s2.shape[0],), dtype=bool)
+                self._save_patches(patches_s2[:, :, :-1, ...], patches_bool_map, where=self.data_s2_path,
+                                   filename=f'S2', id=0)
+                del patches_s2
+                logging.info(f"UPDATING METADATA FOR PATCHES OF TILE: {tile_name}")
+                self._update_metadata(0, tile_name, dates, crs, None, patches_bool_map, None,
+                                      None, None)
 
             if self.delete_source:
                 logging.info(f"REMOVING TILES WITH NAME: {tile_name}")
@@ -187,7 +209,7 @@ class DatasetCreator(object):
                          f"------------------------------------------------------\n\n")
             gc.collect()
         if self.for_inference:
-            return time_series, dates
+            return dates
 
         # TODO train/val/test splits are dependent on crop type classes and therefore
         #  one must create splits himself
@@ -304,9 +326,14 @@ class DatasetCreator(object):
                 pp += 5
                 continue
             except Exception as e:
+                if str(e) == 'Unauthorized access to Opensearch API!':
+                    raise Exception('Unauthorized access to Opensearch API!')
                 logging.info(f'Exception occured {e}')
                 pp += 5
                 continue
+        ts_progress_bar.progress(0, text=f'S2 time series for {tile_name} progress:   100%')
+        zip_progress_bar.progress(0, text=f'Unzipping S2 tiles:  {100}%')
+        tile_progress_bar.progress(0, text=f'Tile progress 100%')
 
     def _patchify(self, data: np.ndarray, affine: rasterio.Affine,
                   patch_size: int = 128) -> Tuple[np.ndarray, list]:
@@ -333,19 +360,21 @@ class DatasetCreator(object):
         # T33UUQ, T33UVQ, T33UWQ, T33UXQ, T33UYQ
 
         # IT results in 82x82 patches
+        if not self.for_inference:
+            assert patch_size == 128, 'Patch size should be 128'
 
-        assert patch_size == 128, 'Patch size should be 128'
+            transform = rasterio.Affine(affine.a, affine.b,
+                                        affine.c,  # (left bbox coordinate) in affine transform can be left unchanged
+                                        affine.d, affine.e,
+                                        affine.f - (affine.a * 484)  # fix (top bbox coordinate)
+                                        )
 
-        transform = rasterio.Affine(affine.a, affine.b,
-                                    affine.c,  # (left bbox coordinate) in affine transform can be left unchanged
-                                    affine.d, affine.e,
-                                    affine.f - (affine.a * 484)  # fix (top bbox coordinate)
-                                    )
+            coords = tile_coordinates(transform, (10496, 10496), size=patch_size)
 
-        coords = tile_coordinates(transform, (10496, 10496), size=patch_size)
-
-        cropped = data[..., 484:, :10496]
-
+            cropped = data[..., 484:, :10496]
+        else:
+            coords = None
+            cropped = data
         # return rearrange(cropped, 't c (h h1) (w w1) -> (h w) t c h1 w1', h1=128, w1=128)
         return rearrange(cropped, '... (h h1) (w w1) -> (h w) ... h1 w1', h1=patch_size, w1=patch_size), \
             coords
@@ -426,17 +455,23 @@ class DatasetCreator(object):
         else:
             bbox = rasters[0].bounds
             affine = rasters[0].transform
-        crs = rasters[0].crs.to_epsg()
-
-        # check whether CRS is UTM33N (epsg=32633)
-        assert crs == 32633 and rasters[0].crs.to_epsg() == rasters[-1].crs.to_epsg(), 'Expected UTM33N crs'
+        if not self.for_inference:
+            crs = rasters[0].crs.to_epsg()
+            # check whether CRS is UTM33N (epsg=32633)
+            assert crs == 32633 and rasters[0].crs.to_epsg() == rasters[-1].crs.to_epsg(), 'Expected UTM33N crs'
+        else:
+            crs = 32633
 
         dates = [r.date for r in rasters]
 
         logging.getLogger().disabled = True
         time_series = []
+        load_raster_progress = st.progress(0, text=f'Loading into memory:  {0}%')
+        done = 0
         for r in tqdm(rasters, desc="Loading rasters..."):
             time_series.append(r.read(bounds=bounds))
+            done += 1
+            load_raster_progress.progress(min((done / len(dates)), 1.0), f'Loading into memory:  {min((done / len(dates)), 1.0) * 100}%')
         logging.getLogger().disabled = False
 
         return np.stack(time_series, axis=0), bbox, affine, crs, file_names, dates
@@ -575,36 +610,51 @@ class DatasetCreator(object):
         Returns
         -------
         """
-        background_cover = np.round(background_cover, 2)
-        nodata_cover = np.round(nodata_cover, 2)
-        snow_cloud_cover = np.round(snow_cloud_cover, 2)
+        if not self.for_inference:
+            background_cover = np.round(background_cover, 2)
+            nodata_cover = np.round(nodata_cover, 2)
+            snow_cloud_cover = np.round(snow_cloud_cover, 2)
 
-        update = pd.DataFrame(
-            {'ID_PATCH': [int((id * patches_bool_map.shape[0]) + i) for i in range(patches_bool_map.shape[0])],
-             'ID_WITHIN_TILE': [int(i) for i in range(patches_bool_map.shape[0])],
-             'Background_Cover': [p for p in background_cover],
-             'Nodata_Cover': [{str(i): v for i, v in enumerate(p)} if patches_bool_map[ii] else None for
-                              ii, p in
-                              enumerate(nodata_cover)],
-             'Snow_Cloud_Cover': [{str(i): v for i, v in enumerate(p)} if patches_bool_map[ii] else None for
-                                  ii, p
-                                  in enumerate(snow_cloud_cover)],
-             'TILE': [tile_name for _ in range(patches_bool_map.shape[0])],
-             'dates-S2': [{str(i): d for i, d in enumerate(dates)} if ii else None for ii in patches_bool_map],
-             'time-series_length': [int(len(dates)) for _ in range(patches_bool_map.shape[0])],
-             'crs': [int(crs) for _ in range(patches_bool_map.shape[0])],
-             'affine': [a if patches_bool_map[ii] else None for ii, a in enumerate(affine)],
-             'Fold': [-1 for _ in range(patches_bool_map.shape[0])],
-             'Status': ['OK' if i else 'REMOVED' for i in patches_bool_map],
-             'set': [None for _ in patches_bool_map]})
+            update = pd.DataFrame(
+                {'ID_PATCH': [int((id * patches_bool_map.shape[0]) + i) for i in range(patches_bool_map.shape[0])],
+                 'ID_WITHIN_TILE': [int(i) for i in range(patches_bool_map.shape[0])],
+                 'Background_Cover': [p for p in background_cover],
+                 'Nodata_Cover': [{str(i): v for i, v in enumerate(p)} if patches_bool_map[ii] else None for
+                                  ii, p in
+                                  enumerate(nodata_cover)],
+                 'Snow_Cloud_Cover': [{str(i): v for i, v in enumerate(p)} if patches_bool_map[ii] else None for
+                                      ii, p
+                                      in enumerate(snow_cloud_cover)],
+                 'TILE': [tile_name for _ in range(patches_bool_map.shape[0])],
+                 'dates-S2': [{str(i): d for i, d in enumerate(dates)} if ii else None for ii in patches_bool_map],
+                 'time-series_length': [int(len(dates)) for _ in range(patches_bool_map.shape[0])],
+                 'crs': [int(crs) for _ in range(patches_bool_map.shape[0])],
+                 'affine': [a if patches_bool_map[ii] else None for ii, a in enumerate(affine)],
+                 'Fold': [-1 for _ in range(patches_bool_map.shape[0])],
+                 'Status': ['OK' if i else 'REMOVED' for i in patches_bool_map],
+                 'set': [None for _ in patches_bool_map]})
 
-        self.metadata = self.metadata.append(update, ignore_index=True)
-        self.metadata = self.metadata.astype({'ID_PATCH': 'int32',
-                                              'ID_WITHIN_TILE': 'int32',
-                                              'Background_Cover': 'float32',
-                                              'time-series_length': 'int8',
-                                              'crs': 'int16',
-                                              'Fold': 'int8'})
+            self.metadata = pd.concat([self.metadata, update], ignore_index=True)
+            self.metadata = self.metadata.astype({'ID_PATCH': 'int32',
+                                                  'ID_WITHIN_TILE': 'int32',
+                                                  'Background_Cover': 'float32',
+                                                  'time-series_length': 'int8',
+                                                  'crs': 'int16',
+                                                  'Fold': 'int8'})
+        else:
+            update = pd.DataFrame(
+                {'ID_PATCH': [int((id * patches_bool_map.shape[0]) + i) for i in range(patches_bool_map.shape[0])],
+                 'TILE': [tile_name for _ in range(patches_bool_map.shape[0])],
+                 'dates-S2': [{str(i): d for i, d in enumerate(dates)} if ii else None for ii in patches_bool_map],
+                 'time-series_length': [int(len(dates)) for _ in range(patches_bool_map.shape[0])],
+                 'crs': [int(crs) for _ in range(patches_bool_map.shape[0])],
+                 })
+
+            self.metadata = pd.concat([self.metadata, update], ignore_index=True)
+            self.metadata = self.metadata.astype({'ID_PATCH': 'int32',
+                                                  'time-series_length': 'int8',
+                                                  'crs': 'int16',
+                                                  })
         self.metadata.to_json(os.path.join(self.out_path, 'metadata.json'), orient="records", indent=4)
 
     def _generate_train_test_split(self) -> None:
