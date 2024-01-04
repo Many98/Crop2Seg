@@ -20,6 +20,7 @@ def home():
     )
 
     grid = gpd.read_file('src/webapp/data/s2_grid/grid.shp')
+    grid = grid.to_crs(4326)
     grid = grid.reset_index()
     try:
         if st.session_state['patch'] != -1:
@@ -37,15 +38,16 @@ def home():
     m.add_basemap("ROADMAP")
     m.add_child(LatLngPopup())
 
-    m.add_gdf(grid, layer_name=f'grid', zoom_to_layer=False, info_mode=None,
+    m.add_gdf(grid, layer_name=f'grid', zoom_to_layer=False, info_mode="on_hover",
               style={
                   # "stroke": True,
                   "color": "red",
                   "opacity": .4,
                   "fill": True,
-                  "fillOpacity": 0.0,
+                  "fillOpacity": 0.2,
               }
               )
+
     m.add_gdf(chosen, layer_name=f'patch', zoom_to_layer=False, info_mode=None,
               style={
                   # "stroke": True,
