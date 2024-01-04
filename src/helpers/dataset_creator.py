@@ -20,6 +20,8 @@ from shapely.geometry import box as shapely_box
 from datetime import datetime
 from einops import rearrange
 
+import streamlit as st
+
 # ### small boiler plate to add src to sys path
 import sys
 from pathlib import Path
@@ -64,13 +66,14 @@ class DatasetCreator(object):
                  delete_source_tiles: bool = False
                  ):
         """
-
+        TODO unify CRS
         Parameters
         ----------
         output_dataset_path: str
             Absolute path where will be stored final dataset
         features_path: str
-            Absolute path to shapefile.
+            Absolute path to shapefile with geometries. CRS should correspond with CRS of tiles
+            Currently using UTM 33N CRS
             Shapefile is expected to have column `value` with integer encoding of classes
                         and column `geometry` with geometry object (which implements python Geo interface) of shape
             Note that `0` is reserved for background (nodata) class
@@ -187,7 +190,7 @@ class DatasetCreator(object):
             return time_series, dates
 
         # TODO train/val/test splits are dependent on crop type classes and therefore
-        #  one must do splits himself
+        #  one must create splits himself
         '''
         if not self.for_pretraining:
             logging.info(f"GENERATING RANDOM TRAIN/VAL/TEST SPLITS IN 14:3:3 PROPORTION")
@@ -281,16 +284,28 @@ class DatasetCreator(object):
         -------
 
         """
+        ts_progress_bar = st.progress(0, text=f'S2 time series for {tile_name} progress:   0%')
+        zip_progress_bar = st.progress(0, text=f'Unzipping S2 tiles:  {0}%')
+        tile_progress_bar = st.progress(0, text=f'Tile progress 0%')
+        pp = 0
         for cloud, date in zip(clouds, dates):
             try:
+                progress = [pp, 5 * len(dates)]
                 sentinel(polygon=None, tile_name=tile_name, platformname='Sentinel-2', producttype='S2MSI2A',
                          count=5,  # max 5 images per month
                          beginposition=date,
                          cloudcoverpercentage=f'[0 TO {cloud}]', path_to_save=self.tiles_path,
-                         account=account, password=password)
+                         account=account, password=password, ts_progress_bar=ts_progress_bar,
+                         zip_progress_bar=zip_progress_bar, tile_progress_bar=tile_progress_bar, progress=progress)
+                pp += 5
             except RuntimeError as e:
                 logging.info(e.__str__())
                 logging.info(f'Skipping date:tile {date}:{tile_name}')
+                pp += 5
+                continue
+            except Exception as e:
+                logging.info(f'Exception occured {e}')
+                pp += 5
                 continue
 
     def _patchify(self, data: np.ndarray, affine: rasterio.Affine,
@@ -377,8 +392,7 @@ class DatasetCreator(object):
                 f.split('_')[1].endswith('L2A')]
 
     def _load_s2(self, tile_name: str, bounds: list = None) -> Tuple[
-        np.ndarray, rasterio.coords.BoundingBox, rasterio.Affine,
-        int, List[str], List[str]]:
+        np.ndarray, rasterio.coords.BoundingBox, rasterio.Affine, int, List[str], List[str]]:
         """
         Auxiliary method to load time-series corresponding to `tile_name`.
         It also serves for up-sampling to 10m
