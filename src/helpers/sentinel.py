@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import gc
 import time
 
 from geojson import Polygon, Point
@@ -13,7 +14,6 @@ import shutil
 import requests
 from urllib.parse import urljoin
 from shapely import geometry
-from osgeo import gdal
 from tqdm.auto import tqdm
 import logging
 
@@ -124,10 +124,10 @@ def sentinel_query(polygon, opensearch_uri=OPENSEARCH_URI, count=5, account=ACCO
         """
         if tile_type == 'L1C':
             return (-(cloud / (MAX_CLOUD // 10)) + 10) * ((size / 100) - MIN_SIZE_L1C / 100) if (
-                        size >= MIN_SIZE_L1C and cloud <= MAX_CLOUD) else 0.0
+                    size >= MIN_SIZE_L1C and cloud <= MAX_CLOUD) else 0.0
         elif tile_type == 'L2A':
             return (-(cloud / (MAX_CLOUD // 10)) + 10) * ((size / 100) - MIN_SIZE_L2A / 100) if (
-                        size >= MIN_SIZE_L2A and cloud <= MAX_CLOUD) else 0.0
+                    size >= MIN_SIZE_L2A and cloud <= MAX_CLOUD) else 0.0
         else:
             return None
 
@@ -220,7 +220,7 @@ def sentinel_query(polygon, opensearch_uri=OPENSEARCH_URI, count=5, account=ACCO
 def sentinel_download(id_list, json_feed, passed_indices,
                       path_dataset=SENTINEL_PATH_DATASET,
                       odata_uri=ODATA_URI, odata_resource=ODATA_RESOURCE, opensearch_uri=OPENSEARCH_URI,
-                      account=ACCOUNT, password=PASSWORD):
+                      account=ACCOUNT, password=PASSWORD, **kwargs):
     """"
     Downloads the UUIDs' tiles and informative .json via the OData API.
 
@@ -240,6 +240,11 @@ def sentinel_download(id_list, json_feed, passed_indices,
     account : str
     password : str
     """
+    # TODO fix it if progress not created
+    ts_progress_bar = kwargs.get('ts_progress_bar', None)
+    tile_progress_bar = kwargs.get('tile_progress_bar', None)
+    done = kwargs.get('progress', [0, 1])[0]
+    total = kwargs.get('progress', [0, 1])[1]
     for idx, sentinel_uuid in enumerate(tqdm(id_list, position=0)):
         url = urljoin(odata_uri, odata_resource)
         url_full = f"{url}('{sentinel_uuid}')/$value"  # should be https://dhr1.cesnet.cz/odata/v1/Products(uuid)/$value
@@ -256,6 +261,7 @@ def sentinel_download(id_list, json_feed, passed_indices,
             if (json_feed['entry'][passed_indices[idx]]['title'] + '.zip') in os.listdir(path_dataset) or \
                     (json_feed['entry'][passed_indices[idx]]['title'] + '.SAFE') in os.listdir(path_dataset):
                 logging.info('This tile has already been downloaded.')
+                done += 1
                 continue
 
         # IT IS NOT LIST IF THERE IS ONLY ONE TILE TO BE DOWNLOADED
@@ -270,24 +276,42 @@ def sentinel_download(id_list, json_feed, passed_indices,
             if (json_feed['entry']['title'] + '.zip') in os.listdir(path_dataset) or \
                     (json_feed['entry']['title'] + '.SAFE') in os.listdir(path_dataset):
                 logging.info('This tile has already been downloaded.')
+                done += 1
                 continue
 
         # DOWNLOAD THE TILE
+
+        done2 = 0
+        if tile_progress_bar is not None:
+            tile_progress_bar.progress(0, text=f'Tile {os.path.split(path)[1]}   progress:   {done2}%')
         try:
             with requests.get(url_full, auth=(account, password), stream=True) as r:
                 chunk_size = 1024
+                total_size = int(r.headers['Content-Length'])
                 r.raise_for_status()
                 with open(path + '.zip', 'wb') as f:
-                    pbar = tqdm(desc=f"Downloading {id_list[idx]}", unit="B", total=int(r.headers['Content-Length']),
+                    pbar = tqdm(desc=f"Downloading {id_list[idx]}", unit="B", total=total_size,
                                 position=0)
                     for chunk in tqdm(r.iter_content(chunk_size=chunk_size)):
                         pbar.update(len(chunk))
+                        done2 += chunk_size
+                        if done2 % 104857600 == 0:
+                            gc.collect()
+                        if tile_progress_bar is not None:
+                            tile_progress_bar.progress(min((done2 / total_size), 1.0),
+                                                       text=f'Tile {os.path.split(path)[1]} progress:  {round(min((done2 / total_size), 1.0) * 100, 1)}%')
                         f.write(chunk)
         except requests.exceptions.HTTPError as e:
             logging.info(f'Http error occurred with response {e.response}')
 
+        gc.collect()
+        done += 1
+        if ts_progress_bar is not None:
+            ts_progress_bar.progress(min((done / total), 1.0),
+                                     text=f'S2 time series progress:  {round(min((done / total), 1.0) * 100, 1)}%')
 
-def sentinel_unzip(path_dataset=SENTINEL_PATH_DATASET):
+
+def sentinel_unzip(path_dataset=SENTINEL_PATH_DATASET, **kwargs):
     """
     Unzips the tiles.
 
@@ -297,6 +321,9 @@ def sentinel_unzip(path_dataset=SENTINEL_PATH_DATASET):
         Specifies the path where to unzip downloaded (zipped) tiles.
     """
     zip_folders = [f for f in os.listdir(path_dataset) if f.endswith('.zip')]
+    zip_progress_bar = kwargs.get('zip_progress_bar', None)
+    done = kwargs.get('progress', [0, 1])[0]
+    total = kwargs.get('progress', [0, 1])[1]
     for path_tile in tqdm(zip_folders, desc='Unziping tiles'):
         # CHECK WHETHER THE ZIP IS UNZIPPED
         if (path_tile[:-4] + '.SAFE') in os.listdir(path_dataset):
@@ -316,6 +343,10 @@ def sentinel_unzip(path_dataset=SENTINEL_PATH_DATASET):
                 raise Exception(f"File {path_tile} is damaged. Try to download it again.")
         # finally remove zip file
         os.remove(os.path.join(path_dataset, path_tile))
+        done += 1
+        if zip_progress_bar is not None:
+            zip_progress_bar.progress(min((done / total), 1.0),
+                                      text=f'Unzipping S2 tiles:  {round(min((done / total), 1.0) * 100, 1)}%')
 
 
 def sentinel(polygon=None, tile_name=None, count=4, platformname='Sentinel-2', path_to_save=SENTINEL_PATH_DATASET,
@@ -528,16 +559,18 @@ def sentinel(polygon=None, tile_name=None, count=4, platformname='Sentinel-2', p
 
     # FINALLY CALL FUNCTION TO PERFORM SEARCH
     id_list, json_feed, num_results, passed_indices = sentinel_query(polygon, count=count, account=account,
-                                                                     password=password, **args, **kwargs)
+                                                                     password=password, **args,
+                                                                     **{k: v for k, v in kwargs.items() if
+                                                                        'progress' not in k})
 
     # DOWNLOAD TILES
-    sentinel_download(id_list, json_feed, passed_indices, path_dataset=path_to_save, account=account, password=password)
-
+    sentinel_download(id_list, json_feed, passed_indices, path_dataset=path_to_save, account=account, password=password,
+                      **kwargs)
     # in last pass it always left some unziped tiles
     time.sleep(10)
 
     # UNZIP TILES
-    sentinel_unzip(path_dataset=path_to_save)
+    sentinel_unzip(path_dataset=path_to_save, **kwargs)
 
 
 def sentinel_scl_dictionary(inverse=False):
@@ -976,6 +1009,8 @@ def sentinel1_reproject_data(path_tile, tiles_path=SENTINEL_PATH_DATASET):
         absolute path to directory where are stored S1 tiles
 
     """
+    from osgeo import gdal
+
     a = os.path.join(tiles_path, path_tile, 'measurement')
 
     tifs_utm = [os.path.join(a, f) for f in os.listdir(a) if len(f.split('-')) == 10]
