@@ -169,6 +169,7 @@ class S2TSCZCropDataset(tdata.Dataset):
             add_ndvi=False,
             temporal_dropout=0.0,
             get_affine=False,
+            for_inference=False,
             *args, **kwargs
     ):
         """
@@ -233,6 +234,7 @@ class S2TSCZCropDataset(tdata.Dataset):
         self.use_doy = False if use_abs_rel_enc else use_doy
         self.set_type = set_type
         self.get_affine = get_affine
+        self.for_inference = for_inference
 
         self.transform = transform
         self.add_ndvi = add_ndvi
@@ -270,20 +272,21 @@ class S2TSCZCropDataset(tdata.Dataset):
 
         # Get metadata
         logging.info("Reading patch metadata . . .")
-        self.meta_patch = pd.read_json(os.path.join(folder, "metadata.json"), orient='records',
-                                       dtype={'ID_PATCH': 'int32',
-                                              'ID_WITHIN_TILE': 'int32',
-                                              'Background_Cover': 'float32',
-                                              'time-series_length': 'int8',
-                                              'crs': 'int16',
-                                              'Fold': 'int8'})
+        if not self.for_inference:
+            self.meta_patch = pd.read_json(os.path.join(folder, "metadata.json"), orient='records',
+                                           dtype={'ID_PATCH': 'int32',
+                                                  'ID_WITHIN_TILE': 'int32',
+                                                  'Background_Cover': 'float32',
+                                                  'time-series_length': 'int8',
+                                                  'crs': 'int16',
+                                                  'Fold': 'int8'})
 
-        self.meta_patch = self.meta_patch[(self.meta_patch['Status'] == 'OK') & (self.meta_patch['set'] == set_type)]
+            self.meta_patch = self.meta_patch[(self.meta_patch['Status'] == 'OK') & (self.meta_patch['set'] == set_type)]
 
-        if self.meta_patch.empty:
-            create_train_test_split(self.folder)
-            self.meta_patch = self.meta_patch[
-                (self.meta_patch['Status'] == 'OK') & (self.meta_patch['set'] == set_type)]
+            if self.meta_patch.empty:
+                create_train_test_split(self.folder)
+                self.meta_patch = self.meta_patch[
+                    (self.meta_patch['Status'] == 'OK') & (self.meta_patch['set'] == set_type)]
 
         self.meta_patch.index = self.meta_patch["ID_PATCH"].astype(int)
         self.meta_patch.sort_index(inplace=True)
@@ -393,21 +396,22 @@ class S2TSCZCropDataset(tdata.Dataset):
             if self.add_ndvi:
                 data = {'S2': torch.cat([data['S2'], ndvi[:, None, ...]], axis=1)}
 
-            target = np.load(
-                os.path.join(
-                    self.folder, f"ANNOTATIONS", f"TARGET_{id_patch}"  # f"TARGET_{id_patch}.npy"
+            if not self.for_inference:
+                target = np.load(
+                    os.path.join(
+                        self.folder, f"ANNOTATIONS", f"TARGET_{id_patch}"  # f"TARGET_{id_patch}.npy"
+                    )
                 )
-            )
-            target = torch.from_numpy(target.astype(int))
+                target = torch.from_numpy(target.astype(int))
 
-            if self.class_mapping is not None:
-                target = self.class_mapping(target)
+                if self.class_mapping is not None:
+                    target = self.class_mapping(target)
 
-            if self.cache:
-                if self.mem16:
-                    self.memory[item] = [{k: v.half() for k, v in data.items()}, target]
-                else:
-                    self.memory[item] = [data, target]
+                if self.cache:
+                    if self.mem16:
+                        self.memory[item] = [{k: v.half() for k, v in data.items()}, target]
+                    else:
+                        self.memory[item] = [data, target]
 
         else:
             data, target = self.memory[item]
@@ -460,6 +464,9 @@ class S2TSCZCropDataset(tdata.Dataset):
         assert data.shape[0] == dates.shape[
             0], f'Shape in time dimension does not match for data T={data.shape[0]} and ' \
                 f'for dates T={dates.shape[0]}. Id of patch is {id_patch}'
+
+        if self.for_inference:
+            return data, dates
 
         if self.transform and self.set_type == 'train':
             data, target = self.transform(data, target)  # 4d tensor T x C x H x W, 2d tensor H x W
