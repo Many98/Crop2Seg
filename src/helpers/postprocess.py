@@ -437,9 +437,6 @@ def homogenize(prediction: Union[str, rasterio.io.MemoryFile, rasterio.io.Datase
 
     filtered_features = filtered_features.reset_index()
     filtered_features['area_polygon'] = filtered_features['geometry'].area
-    #import hashlib
-    #filtered_features.loc[:, 'hash'] = filtered_features['geometry'].apply(
-    #    lambda x: hashlib.sha256(bytes(str(x), 'utf-8')).hexdigest())
 
     merged = gpd.overlay(filtered_features, gdf, how='intersection')
     merged['area'] = merged['geometry'].area
@@ -447,26 +444,16 @@ def homogenize(prediction: Union[str, rasterio.io.MemoryFile, rasterio.io.Datase
     kk = merged.groupby(['index', 'raster_val'], as_index=False)[['area', 'area_polygon']].agg({'area': 'sum',
                                                                                                 'area_polygon': ['sum',
                                                                                                                  'count']})
-    # cc = kk.groupby('index', as_index=False)[['area']].max()
-    cc = kk[(kk.raster_val > 0) | ((kk.raster_val == 0) & (
-                (kk.area['sum'] / (kk.area_polygon['sum'] / kk.area_polygon['count'])) > 0.75))].groupby('index',
-                                                                                                         as_index=False)[
-        [('area', 'sum')]].max()
+    #cc = kk.groupby('index', as_index=False)[['area']].max()
+    cc = kk[(kk.raster_val > 0) | ((kk.raster_val == 0) & ((kk.area['sum'] / (kk.area_polygon['sum'] / kk.area_polygon['count'])) > 0.75))].groupby('index', as_index=False)[[('area', 'sum')]].max()
 
     cc.columns = cc.columns.droplevel(1)
-    #gg = cc[['index', 'area']].merge(filtered_features[['index', 'geometry', 'Legenda', 'hash']], on='index',
-    #                                 how='inner')
-    gg = cc[['index', 'area']].merge(filtered_features[['index', 'geometry']], on='index',
-                                     how='inner')
+    gg = cc[['index', 'area']].merge(filtered_features[['index', 'geometry']], on='index', how='inner')
 
     kk.columns = kk.columns.droplevel(1)
-    #uu = gg[['area', 'index', 'geometry', 'hash', 'Legenda']].merge(kk[['area', 'raster_val', 'index']],
-    #                                                                on=['area', 'index'], how='inner')
-    uu = gg[['area', 'index', 'geometry']].merge(kk[['area', 'raster_val', 'index']],
-                                                 on=['area', 'index'], how='inner')
+    uu = gg[['area', 'index', 'geometry']].merge(kk[['area', 'raster_val']], on='area', how='inner')
 
     tt = gpd.GeoDataFrame(uu)
-    #return tt['hash'].values, tt['area'].values, tt['raster_val'].values, tt['Legenda'].values
     if type_ == 'hard':
         if array_out:
             shapes_ = tt[['geometry', 'raster_val']].values.tolist()
@@ -600,57 +587,3 @@ def homogenize_boundaries(prediction: np.ndarray, affine: list,
         return out
     else:
         return tt[['geometry', 'raster_val']]
-
-
-if __name__ == '__main__':
-    from src.datasets.s2_ts_cz_crop import crop_cmap, labels_super_short
-    import matplotlib.pyplot as plt
-    from src.visualization.visualize import plot_lulc
-
-    pred = np.load('/disk2/fratrik/results/UTAE_CZ_OLD/new/Fold_1/inference/pred_t1_71571.npy')
-    out_crop = np.load(
-        '/disk2/fratrik/results/WTAE_CZ/wtae_base_abs_rel_enc_lbl_smth_0_1_boundary_parallel/Fold_1/inference/out_crop_71571.npy')
-    aff = [[10.0, 0.0], [0.0, -10.0], [685760.0, 5428620.0]]  # 71571
-    out_boundary = np.load(
-        '/disk2/fratrik/results/WTAE_CZ/wtae_base_abs_rel_enc_lbl_smth_0_1_boundary_parallel/Fold_1/inference/out_boundary_71571.npy')
-    # d = S2TSCZCropDataset('/disk2/fratrik/S2TSCZCrop', set_type='test', norm=False)
-    # meta = d.meta_patch
-    out_crop = np.load(
-        '/disk2/fratrik/results/WTAE_CZ/wtae_base_label_smoothing_0_1/Fold_1/inference/out_crop_6432.npy')
-    aff = [[10.0, 0.0], [0.0, -10.0], [446040.0, 5595320.0]]  # 6432
-
-    # out_crop = np.load(
-    #    '/disk2/fratrik/results/WTAE_CZ/wtae_base_abs_rel_enc_lbl_smth_0_1_boundary_parallel/Fold_1/inference/out_crop_6514.npy')
-    # aff = [[10.0, 0.0], [0.0, -10.0], [446040.0, 5594040.0]]
-    # out_crop = np.load(
-    #    '/disk2/fratrik/results/WTAE_CZ/wtae_base_abs_rel_enc_lbl_smth_0_1_boundary_parallel/Fold_1/inference/out_crop_12540.npy')
-    # aff = [[10.0, 0.0], [0.0, -10.0], [597260.0, 5605560.0]]
-    # out_crop = np.load(
-    #    '/disk2/fratrik/results/WTAE_CZ/wtae_base_abs_rel_enc_lbl_smth_0_1_boundary_parallel/Fold_1/inference/out_crop_71571.npy')
-    # aff = [[10.0, 0.0], [0.0, -10.0], [685760.0, 5428620.0]]  # 71571
-    out_crop = np.load(
-        '/disk2/fratrik/results/WTAE_CZ/wtae_base_abs_rel_enc_lbl_smth_0_1_boundary_parallel/Fold_1/inference/out_crop_6432.npy')
-    aff = [[10.0, 0.0], [0.0, -10.0], [446040.0, 5595320.0]]  # 6432
-    # polygonized = polygonize(out_crop[0], aff, type_='hard')
-    # polygonized = polygonize(out_crop[0], aff, type_='hard', array_out=True)
-    # point = prediction2point_layer(pred, aff)
-    # point = prediction2point_layer(out_crop[0], aff)
-    # polygon = prediction2polygon_layer(pred, aff)
-    # polygon = prediction2polygon_layer(out_crop[0], aff)
-    # polygon = prediction2polygon_layer(out_boundary[0], aff)
-    # polygonized = polygonize(out_crop[0], aff, type_='soft')
-    # polygonized = polygonize(out_crop[0], aff, type_='soft', array_out=True)
-    # polygonized_boundary = polygonize(out_boundary[0], aff, type_='soft', array_out=True)
-    homogenized = homogenize(prediction=out_crop[0],
-                             vector_data_path='/disk2/fratrik/Plodinova_mapa_9_2019_UTM33N_fixed/Plodinova_mapa_9_2019_UTM33N_fixed.shp',
-                             affine=aff, epsg='epsg:32633', type_='hard')
-    homogenized = homogenize(prediction=out_crop[0],
-                             vector_data_path='/disk2/fratrik/Plodinova_mapa_9_2019_UTM33N_fixed/Plodinova_mapa_9_2019_UTM33N_fixed.shp',
-                             affine=aff, epsg='epsg:32633', type_='hard', array_out=True)
-    homogenized = homogenize(prediction=out_crop[0],
-                             vector_data_path='/disk2/fratrik/Plodinova_mapa_9_2019_UTM33N_fixed/Plodinova_mapa_9_2019_UTM33N_fixed.shp',
-                             affine=aff, epsg='epsg:32633', type_='soft')
-    homogenized = homogenize(prediction=out_crop[0],
-                             vector_data_path='/disk2/fratrik/Plodinova_mapa_9_2019_UTM33N_fixed/Plodinova_mapa_9_2019_UTM33N_fixed.shp',
-                             affine=aff, epsg='epsg:32633', type_='soft', array_out=True)
-    print('t')
