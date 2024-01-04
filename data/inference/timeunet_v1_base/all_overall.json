@@ -1,0 +1,12 @@
+{
+    "micro_IoU": 0.8380881398879324,
+    "micro_Precision": 0.9119128965589542,
+    "micro_Recall": 0.9119128965589542,
+    "micro_F1-score": 0.9119128965589542,
+    "MACRO_IoU": 0.7347837312835005,
+    "MACRO_Precision": 0.8372926392307732,
+    "MACRO_Recall": 0.825887743099544,
+    "MACRO_F1-score": 0.8310320141435964,
+    "Accuracy": 0.9119128965589542,
+    "folds": "Performance calculated on folds: all"
+}
