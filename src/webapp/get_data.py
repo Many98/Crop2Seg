@@ -124,9 +124,11 @@ def get_LPIS(prefix, year):
         except:
             pass
 
-        # finally remove zip file
-        if not st.session_state['cache_enabled']:
-            os.remove(f"{os.path.join(prefix, 'cache/lpis/')}{year}1231-CR-DPB-SHP.zip")
+    # finally remove zip file
+    try:
+        os.remove(f"{os.path.join(prefix, 'cache/lpis/')}{year}1231-CR-DPB-SHP.zip")
+    except:
+        pass
 
 
 def get_info(index):
