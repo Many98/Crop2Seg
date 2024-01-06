@@ -17,16 +17,16 @@ def pad_tensor(x, l, pad_value=0):
     return F.pad(x, pad=pad, value=pad_value)
 
 
-def pad_collate(batch, pad_value=0):
+def pad_collate(batch, pad_value=0, max_size=None):
     # modified default_collate from the official pytorch repo
     # https://github.com/pytorch/pytorch/blob/master/torch/utils/data/_utils/collate.py
     elem = batch[0]
     elem_type = type(elem)
     if isinstance(elem, torch.Tensor):
         out = None
-        if len(elem.shape) > 0:
+        if (len(elem.shape) > 0 and elem.dim() != 2) or (elem.dim() == 2 and elem.shape[1] <= 2):
             sizes = [e.shape[0] for e in batch]
-            m = max(sizes)
+            m = max(sizes) if max_size is None else max_size
             if not all(s == m for s in sizes):
                 # pad tensors which have a temporal dimension
                 batch = [pad_tensor(e, m, pad_value=pad_value) for e in batch]
@@ -61,7 +61,7 @@ def pad_collate(batch, pad_value=0):
         if not all(len(elem) == elem_size for elem in it):
             raise RuntimeError("each element in list of batch should be of equal size")
         transposed = zip(*batch)
-        return [pad_collate(samples) for samples in transposed]
+        return [pad_collate(samples, max_size=max_size) for samples in transposed]
 
     raise TypeError("Format not managed : {}".format(elem_type))
 
