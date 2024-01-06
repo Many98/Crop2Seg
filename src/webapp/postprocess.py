@@ -2,7 +2,7 @@
 # SCRIPT CONTAINING ALL RELEVANT FUNCTIONS FOR POSTPROCESSING PREDICTION
 # ############
 import os
-
+import time
 import rasterio
 from rasterio.features import shapes
 import geopandas as gpd
@@ -57,17 +57,17 @@ def vectorize(tif_path):
 
 
 def cropmap(year):
-    st.title("Crop Map")
+    st.header('Crop Map', divider='rainbow')
 
     # here how to export proj file because in lpis is not proj file and it is in krovak crs
     # with fiona.open(
-    # f"src/webapp/data/lpis/{year}1231-CR-DPB-SHP.shp"
+    # f"src/webapp/cache/lpis/{year}1231-CR-DPB-SHP.shp"
     #    ) as src:
     # driver = src.driver
     # schema = src.schema
     # feat = src[1]
 
-    # with fiona.open(f"src/webapp/data/lpis/example.shp", "w", driver=driver, crs=gdf2.crs,
+    # with fiona.open(f"src/webapp/cache/lpis/example.shp", "w", driver=driver, crs=gdf2.crs,
     #                schema=schema) as dst:
     #    print(len(dst))
     #    dst.write(feat)
@@ -75,61 +75,94 @@ def cropmap(year):
     m = leafmap.Map(center=(50, 14), draw_export=True, zoom=8)
     m.add_basemap("HYBRID")
     m.add_basemap("ROADMAP")
-    # TODO add custom tooltip
 
-    # m.add_raster('src/webapp/data/prediction/raster_t33uvr_1024.tif')
-    if st.session_state['predicted']:
+    if st.session_state['show_crop_map']:
+        with st.status("Loading layers ...", expanded=True) as status:
+            try:
+                gdf_pred = gpd.read_file(f'src/webapp/cache/prediction/prediction_{year}.shp')
+                # remove unnecessary polygons
+                gdf_pred = gdf_pred[gdf_pred.raster_val != 0]
+                gdf_pred = gdf_pred[gdf_pred.area > 5000]
 
-        gdf = vectorize('src/webapp/data/prediction/raster_t33uvr_1024.tif')
-        cmap = crop_cmap()
-        gdf['crop'] = gdf['raster_val'].apply(lambda x: labels[int(x)])
+                cmap = crop_cmap()
+                gdf_pred['crop'] = gdf_pred['raster_val'].apply(lambda x: labels[int(x)])
 
-        if st.session_state['lpis_enabled']:
+                if st.session_state['lpis_enabled']:
+                    try:
+                        gdf_homogenized = gpd.read_file(f'src/webapp/cache/prediction/prediction_homogenized_{year}.shp')
 
-            # workaround to get proper crs and bbox
-            gdf2 = gdf.copy()
-            gdf2 = gdf2.to_crs('epsg:5514')  # krovak
-            b = gdf2.total_bounds
-            bbox = shapely_box(b[0], b[1], b[2], b[3])
-            features_19 = gpd.read_file(f'src/webapp/data/lpis/{year}1231-CR-DPB-SHP.shp',
-                                        bbox=bbox)
-            features_19 = features_19.to_crs(32633)
+                        # workaround to get proper crs and bbox
+                        gdf2 = gdf_pred.copy()
+                        gdf2 = gdf2.to_crs('epsg:5514')  # krovak
+                        b = gdf2.total_bounds
+                        bbox = shapely_box(b[0], b[1], b[2], b[3])
+                        features_19 = gpd.read_file(f'src/webapp/cache/lpis/{year}1231-CR-DPB-SHP.shp',
+                                                    bbox=bbox)
+                        features_19 = features_19.to_crs(32633)
 
-            vymera = [i for i in features_19.columns if 'VYMERA' in i]
+                        vymera = [i for i in features_19.columns if 'VYMERA' in i]
 
-            features_19 = features_19[['ID_DPB', 'CTVEREC', 'PLATNYOD', 'KULTURANAZ', 'KULTURAKOD',
-                                       'KULTURA', 'KULTURAOD', 'geometry'] + vymera]
+                        features_19 = features_19[['ID_DPB', 'CTVEREC', 'PLATNYOD', 'KULTURANAZ', 'KULTURAKOD',
+                                                   'KULTURA', 'KULTURAOD', 'geometry'] + vymera]
 
-            m.add_gdf(features_19, layer_name=f'lpis_{year}',
-                      style={
-                          "stroke": True,
-                          "color": "red",
-                          "weight": .1,
-                          "opacity": .5,
-                          "fill": True,
-                          "fillOpacity": 0.5,
-                      }
-                      )
+                        m.add_gdf(features_19, layer_name=f'lpis_{year}',
+                                  style={
+                                      "stroke": True,
+                                      "color": "red",
+                                      "weight": .1,
+                                      "opacity": .5,
+                                      "fill": True,
+                                      "fillOpacity": 0.5,
+                                  }
+                                  )
+                        gdf_homogenized['crop'] = gdf_homogenized['raster_val'].apply(lambda x: labels[int(x)])
+                        m.add_data(gdf_homogenized, layer_name=f'homogenized_{year}', labels=labels,
+                                   colors=list(cmap.values())[:-1],  # without boundary
+                                   column="raster_val",
+                                   legend_position='bottomright',
+                                   scheme='UserDefined',
+                                   classification_kwds={'bins': [i for i in range(0, 15)]},
+                                   # style_kwds =dict(color="gray", LineWidth=10, weight=0.99)
+                                   # k=len(labels)+1,
+                                   style={
+                                       "stroke": True,
+                                       "color": "gray",
+                                       "weight": .1,
+                                       "opacity": .1,
+                                       "fill": True,
+                                       "fillOpacity": 0.1,
+                                   }, fields=['crop']
+                                   )
+                    except Exception as e:
+                        status.update(label=f"Error when loading LPIS data... Skipping", state="error",
+                                      expanded=False)
+                        st.error(f'Error : {e}')
 
-        m.add_data(gdf, layer_name='prediction', labels=labels,
-                   colors=list(cmap.values())[:-1],  # without boundary
-                   column="raster_val",
-                   legend_position='bottomright',
-                   scheme='UserDefined',
-                   classification_kwds={'bins': [i for i in range(0, 15)]},
-                   # style_kwds =dict(color="gray", LineWidth=10, weight=0.99)
-                   # k=len(labels)+1,
-                   style={
-                       "stroke": True,
-                       "color": "gray",
-                       "weight": .1,
-                       "opacity": .1,
-                       "fill": True,
-                       "fillOpacity": 0.1,
-                   },
-                   fields=['crop'])
-        m.zoom_to_gdf(gdf)
+                m.add_data(gdf_pred, layer_name=f'prediction_{year}', labels=labels,
+                           colors=list(cmap.values())[:-1],  # without boundary
+                           column="raster_val",
+                           legend_position='bottomright',
+                           scheme='UserDefined',
+                           classification_kwds={'bins': [i for i in range(0, 15)]},
+                           # style_kwds =dict(color="gray", LineWidth=10, weight=0.99)
+                           # k=len(labels)+1,
+                           style={
+                               "stroke": True,
+                               "color": "gray",
+                               "weight": .1,
+                               "opacity": .1,
+                               "fill": True,
+                               "fillOpacity": 0.1,
+                           },
+                           fields=['crop'])
+                m.zoom_to_gdf(gdf_pred)
+            except Exception as e:
+                status.update(label=f"Error when loading prediction layer... Skipping", state="error",
+                              expanded=False)
+                st.error(f'Error : {e}')
 
+            status.update(label=f"Layers loaded successfully!", state="complete",
+                          expanded=False)
     # m.add_legend(title='Legend', labels=labels, layer_name='prediction', colors=cmap.values(), legend_dict=cmap)
     '''
     m.add_heatmap(
@@ -142,8 +175,9 @@ def cropmap(year):
     )
     '''
     m.to_streamlit(height=600)
+    st.session_state['predicted'] = False
+    if st.session_state['run_pipeline'] and st.session_state['locked']:
+        # time.sleep(0.2)
+        st.session_state['locked'] = False
+        st.rerun()
 
-
-if __name__ == '__main__':
-    gdf = vectorize('src/webapp/data/prediction/raster_t33uvr_1024.tif')
-    print('done')
