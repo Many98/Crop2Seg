@@ -24,8 +24,8 @@ def get_s2_shape(prefix: str):
     downloads git repo with Sentinel-2 grid shapefile
     https://github.com/justinelliotmeyers/Sentinel-2-Shapefile-Index
     """
-    os.makedirs(os.path.join(prefix, 'data/s2_grid/'), exist_ok=True)
-    git.Git(os.path.join(prefix, 'data/s2_grid/')).clone(
+    os.makedirs(os.path.join(prefix, 'cache/s2_grid/'), exist_ok=True)
+    git.Git(os.path.join(prefix, 'cache/s2_grid/')).clone(
         "https://github.com/justinelliotmeyers/Sentinel-2-Shapefile-Index.git")
 
 
@@ -48,11 +48,11 @@ def partition(geom, parts=6):
 
 def generate_grid(prefix: str):
     if not os.path.isfile(
-            os.path.join(prefix, 'data/s2_grid/Sentinel-2-Shapefile-Index/sentinel_2_index_shapefile.shp')):
+            os.path.join(prefix, 'cache/s2_grid/Sentinel-2-Shapefile-Index/sentinel_2_index_shapefile.shp')):
         get_s2_shape(prefix)
-    if not os.path.isfile(os.path.join(prefix, 'data/s2_grid/grid.shp')):
+    if not os.path.isfile(os.path.join(prefix, 'cache/s2_grid/grid.shp')):
         grid_s2 = gpd.read_file(
-            os.path.join(prefix, 'data/s2_grid/Sentinel-2-Shapefile-Index/sentinel_2_index_shapefile.shp'),
+            os.path.join(prefix, 'cache/s2_grid/Sentinel-2-Shapefile-Index/sentinel_2_index_shapefile.shp'),
             bbox=shapely_box(11.8, 48.48, 18.9, 51.12))
         grid_s2 = grid_s2[grid_s2.Name.isin(['33UVS', '33UWS', '33UUR', '33UVR', '33UWR', '33UXR',
                                              '33UYR', '33UUQ', '33UVQ', '33UWQ', '33UXQ', '33UYQ'])]
@@ -65,7 +65,7 @@ def generate_grid(prefix: str):
             tiles.append([row['Name']] * 25)
         grid = gpd.GeoDataFrame(data={'tile': list(reduce(lambda x, y: x + y, tiles, []))},
                                 geometry=list(reduce(lambda x, y: x + y, pols, [])), crs='EPSG:32633')
-        grid.to_file(os.path.join(prefix, 'data/s2_grid/grid.shp'), driver='ESRI Shapefile')
+        grid.to_file(os.path.join(prefix, 'cache/s2_grid/grid.shp'), driver='ESRI Shapefile')
 
 
 def get_LPIS(prefix, year):
@@ -75,9 +75,9 @@ def get_LPIS(prefix, year):
     """
     assert year > 2014 and year < datetime.date.today().year, 'Year must be > 2014 and < current year'
 
-    os.makedirs(os.path.join(prefix, 'data/lpis/'), exist_ok=True)
-    if not os.path.isfile(f"{os.path.join(prefix, 'data/lpis/')}{year}1231-CR-DPB-SHP.zip") and \
-            not os.path.isfile(f"{os.path.join(prefix, 'data/lpis/')}{year}1231-CR-DPB-SHP.shp"):
+    os.makedirs(os.path.join(prefix, 'cache/lpis/'), exist_ok=True)
+    if not os.path.isfile(f"{os.path.join(prefix, 'cache/lpis/')}{year}1231-CR-DPB-SHP.zip") and \
+            not os.path.isfile(f"{os.path.join(prefix, 'cache/lpis/')}{year}1231-CR-DPB-SHP.shp"):
         try:
             with requests.get(f'https://eagri.cz/public/app/eagriapp/LpisData/{year}1231-CR-DPB-SHP.zip',
                               stream=True) as r:
@@ -86,7 +86,7 @@ def get_LPIS(prefix, year):
                 # progress_bar = tqdm(total=total_size_in_bytes, unit='iB', unit_scale=True)
                 my_bar = st.progress(0, text=f'Downloading vector data:  {0}%')
                 done = 0
-                with open(f"{os.path.join(prefix, 'data/lpis/')}{year}1231-CR-DPB-SHP.zip", mode="wb") as f:
+                with open(f"{os.path.join(prefix, 'cache/lpis/')}{year}1231-CR-DPB-SHP.zip", mode="wb") as f:
                     # for chunk in stqdm(r.iter_content(chunk_size=block_size), total=total_size_in_bytes, unit='kB',
                     #                   unit_scale=True):
                     for chunk in r.iter_content(chunk_size=block_size):
@@ -100,59 +100,58 @@ def get_LPIS(prefix, year):
             print(e)
             raise Exception(f'Download error: LPIS <{year}>')
 
-    if os.path.isfile(f"{os.path.join(prefix, 'data/lpis/')}{year}1231-CR-DPB-SHP.zip") and \
-            not os.path.isfile(f"{os.path.join(prefix, 'data/lpis/')}{year}1231-CR-DPB-SHP.shp"):
+    if os.path.isfile(f"{os.path.join(prefix, 'cache/lpis/')}{year}1231-CR-DPB-SHP.zip") and \
+            not os.path.isfile(f"{os.path.join(prefix, 'cache/lpis/')}{year}1231-CR-DPB-SHP.shp"):
 
         st.write('Unzipping LPIS data ...')
         # CHECK IF ZIP IS TREATED AS ZIP (ZIPFILE MODULE DID NOT WORK ON ALL ZIPPED TILES)
-        if zipfile.is_zipfile(f"{os.path.join(prefix, 'data/lpis/')}{year}1231-CR-DPB-SHP.zip"):
-            with zipfile.ZipFile(f"{os.path.join(prefix, 'data/lpis/')}{year}1231-CR-DPB-SHP.zip", "r") as zip_ref:
-                zip_ref.extractall(f"{os.path.join(prefix, 'data/lpis/')}")
+        if zipfile.is_zipfile(f"{os.path.join(prefix, 'cache/lpis/')}{year}1231-CR-DPB-SHP.zip"):
+            with zipfile.ZipFile(f"{os.path.join(prefix, 'cache/lpis/')}{year}1231-CR-DPB-SHP.zip", "r") as zip_ref:
+                zip_ref.extractall(f"{os.path.join(prefix, 'cache/lpis/')}")
 
         # OTHERWISE USE SHUTIL MODULE
         else:
             try:
-                shutil.unpack_archive(f"{os.path.join(prefix, 'data/lpis/')}{year}1231-CR-DPB-SHP.zip",
-                                      extract_dir=f"{os.path.join(prefix, 'data/lpis/')}")
+                shutil.unpack_archive(f"{os.path.join(prefix, 'cache/lpis/')}{year}1231-CR-DPB-SHP.zip",
+                                      extract_dir=f"{os.path.join(prefix, 'cache/lpis/')}")
             except Exception:
-                os.remove(f"{os.path.join(prefix, 'data/lpis/')}{year}1231-CR-DPB-SHP.zip")
+                os.remove(f"{os.path.join(prefix, 'cache/lpis/')}{year}1231-CR-DPB-SHP.zip")
                 raise Exception(f"File {year}1231-CR-DPB-SHP.zip is damaged. Try to download it again.")
         try:
             # workaround to get proper prj file (which is not contained within downloaded LPIS data)
             shutil.copy(f"data/inference/YYYY1231-CR-DPB-SHP.prj",
-                        f"{os.path.join(prefix, 'data/lpis/')}{year}1231-CR-DPB-SHP.prj")
+                        f"{os.path.join(prefix, 'cache/lpis/')}{year}1231-CR-DPB-SHP.prj")
         except:
             pass
 
         # finally remove zip file
         if not st.session_state['cache_enabled']:
-            os.remove(f"{os.path.join(prefix, 'data/lpis/')}{year}1231-CR-DPB-SHP.zip")
+            os.remove(f"{os.path.join(prefix, 'cache/lpis/')}{year}1231-CR-DPB-SHP.zip")
 
 
 def get_info(index):
     """
     returns tilename, patch_bounds
     """
-    grid = gpd.read_file('src/webapp/data/s2_grid/grid.shp')
+    grid = gpd.read_file('src/webapp/cache/s2_grid/grid.shp')
     grid = grid.reset_index()
 
     patch = grid[grid['index'] == index]
-    patch = patch.to_crs(32633)
 
     return patch['tile'].values[0], patch.total_bounds
 
 
 def get_ts(tilename, patch_id, bounds, year, start_dt, end_dt, account, password, cache=False):
-    temp_dir = f'src/webapp/data/s2_patches/{tilename}_{patch_id}_{year}'
+    temp_dir = f'src/webapp/cache/s2_patches/{tilename}_{patch_id}_{year}'
     if not os.path.isdir(temp_dir):
         try:
-            shutil.rmtree('src/webapp/data/s2_patches/')
+            shutil.rmtree('src/webapp/cache/s2_patches/')
         except:
             pass
 
     download = True
 
-    s2_data_dir = f'src/webapp/data/s2_tiles/tmp_{tilename}_{year}'
+    s2_data_dir = f'src/webapp/cache/s2_tiles/tmp_{tilename}_{year}'
 
     # if os.path.isdir(s2_data_dir):
     #    if len(os.listdir(s2_data_dir)) != 0:
@@ -184,14 +183,14 @@ def get_ts(tilename, patch_id, bounds, year, start_dt, end_dt, account, password
         f'[{year}-09-01T00:00:00.000Z TO {year}-09-30T00:00:00.000Z]',
         f'[{year}-10-01T00:00:00.000Z TO {year}-10-31T00:00:00.000Z]'
     ])
-    dates = dates[start_dt:end_dt]
-    clouds = clouds[start_dt:end_dt]
+    dates = dates[start_dt:end_dt+1]
+    clouds = clouds[start_dt:end_dt+1]
     try:
         dates = dc(tile_names=tiles, clouds=clouds, dates=dates, bounds=bounds, account=account,
                    password=password)
     except Exception as e:
         if str(e) == 'Unauthorized access to Opensearch API!':
-            return None, 401
+            return 401, temp_dir
         else:
             clouds = np.array([85, 85, 65, 65, 65, 65, 65, 75, 75, 85, 85, 85, 85, 85])
             st.warning(f'Problem occured when downloading S2 data. \n'
@@ -207,12 +206,5 @@ def get_ts(tilename, patch_id, bounds, year, start_dt, end_dt, account, password
                 return
     # TODO at the end delete all create files/dirs if not required caching
 
-    return dates
+    return dates, temp_dir
 
-
-if __name__ == '__main__':
-    '''
-    get_ts('T33UWR', [500000, 5500000, 501280, 5501280], year=2020, cache=False,
-           account='', password='')
-    '''
-    generate_grid('src/webapp')
