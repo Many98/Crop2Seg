@@ -10,8 +10,6 @@ from torch import nn
 import torch.nn.functional as F
 import torchnet as tnt
 
-from thop import profile
-from fvcore.nn import FlopCountAnalysis, flop_count_table
 
 # ### small boiler plate to add src to sys path
 import sys
@@ -35,7 +33,10 @@ from src.backbones.convlstm import ConvLSTM_Seg
 from src.backbones.recunet import RecUNet
 from src.backbones.fpn import FPNConvLSTM
 from src.backbones.wtae import WTAE
+#from src.backbones.etae import ETAE
 from src.backbones.unet import Unet_naive
+
+#from src.backbones.utae_original import UTAE
 
 from einops import rearrange
 
@@ -77,7 +78,7 @@ def get_model(config):
             add_linear=config.add_linear,
             add_boundary_loss=config.add_boundary_loss
         )
-    if config.model == "wtae":
+    elif config.model == "wtae":
         model = WTAE(
             input_dim=config.input_dim,  # number of input channels
             encoder_widths=config.encoder_widths,
@@ -243,6 +244,10 @@ def iterate(
         Currently works by reclassification to ignore class
         Note that code expects that there is set ignore index
     """
+    #import matplotlib.pyplot as plt
+    #from src.datasets.pastis import crop_cmap, labels_super_short
+    #from src.visualization.visualize import plot_lulc
+
     loss_meter = tnt.meter.AverageValueMeter()
     iou_meter = IoU(
         num_classes=config.num_classes,
@@ -263,6 +268,8 @@ def iterate(
         )
 
         criterion_b = FocalCELoss(gamma=2.0)
+    #catcher = {'pred': [], 'conf': [], 'label': []}
+    #catcher = {'hash': [], 'area': [], 'raster_val': [], 'Legenda': []}
     t_start = time.time()
     for i, batch in enumerate(data_loader):
         if device is not None:
@@ -325,9 +332,34 @@ def iterate(
 
         with torch.no_grad():
             pred = out.argmax(dim=1)
+            #catcher['pred'].append(pred.flatten().detach().cpu().numpy())
+            #catcher['label'].append(y.flatten().detach().cpu().numpy())
+            #catcher['conf'].append(rearrange(nn.Softmax(dim=1)(out), 'b c h w -> (b h w) c').detach().cpu().numpy().max(axis=1))
             pred_ = out.topk(2, dim=1).indices
             if config.add_boundary_loss:
                 pred_b = out_b.argmax(dim=1)
+
+            if config.get_affine:  # performs postprocessing (homogenization of prediction)
+                pp = []
+
+                for p, a in zip(pred, affine):
+                    p = homogenize(p.detach().cpu().numpy(),
+                                   vector_data_path=AGRI_PATH_DATASET, type_='hard',
+                                   affine=a.cpu().numpy(), array_out=True)
+                    pp.append(torch.from_numpy(p))
+                    #catcher['hash'].append(p[0])
+                    #catcher['area'].append(p[1])
+                    #catcher['raster_val'].append(p[2])
+                    #catcher['Legenda'].append(p[3])
+
+                '''
+                for p, a in zip(out, affine):
+                    p = homogenize(nn.Softmax(dim=0)(p).detach().cpu().numpy(),
+                                   vector_data_path=AGRI_PATH_DATASET, type_='soft',
+                                   affine=a.cpu().numpy(), array_out=True)
+                    pp.append(torch.from_numpy(p))
+                '''
+                pred = torch.stack(pp).to(config.device)
 
         # Specify test region default is all
         if test_region in ['boundary', 'interior']:
@@ -342,6 +374,11 @@ def iterate(
                 ignore_label = [i for i in range(config.num_classes)][config.ignore_index]
                 y = torch.where(dilated.sum(1) > 1, ignore_label, y)
 
+                #wh = torch.where(dilated.sum(1) > 1, 0, 1).flatten().detach().cpu().numpy()
+                #whh = np.where(wh == 0)
+                #catcher['pred'][-1] = catcher['pred'][-1][whh]
+                #catcher['label'][-1] = catcher['label'][-1][whh]
+                #catcher['conf'][-1] = catcher['conf'][-1][whh]
         # ----------------------------------------------
         pred_top2 = torch.where(y == pred_[:, 1, ...], pred_[:, 1, ...], pred_[:, 0, ...])
         iou_meter.add(pred, y)
@@ -370,6 +407,13 @@ def iterate(
                     )
                 )
     t_end = time.time()
+    #ll = np.concatenate(catcher['label'])
+    #pred = np.concatenate(catcher['pred'])
+    #from src.visualization.visualize import reliability_plot, bin_strength_plot
+    #import matplotlib.pyplot as plt
+    #conff = np.concatenate(catcher['conf'])
+    #plot = reliability_plot(conff, pred, ll)
+    #plot2 = bin_strength_plot(conff, pred, ll)
     total_time = t_end - t_start
     logging.info("Epoch time : {:.1f}s".format(total_time))
     miou, acc = iou_meter.get_miou_acc()
@@ -500,6 +544,9 @@ def model_characteristics(model: nn.Module, device: str = 'cuda'):
     device: str
         Name of device. Can be `cpu`, `cuda`
     """
+    from thop import profile
+    from fvcore.nn import FlopCountAnalysis, flop_count_table
+
     model = model.to(device)
 
     sample_data = torch.randn(1, 30, 10, 128, 128).to(device)
