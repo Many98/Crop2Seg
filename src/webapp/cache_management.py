@@ -20,8 +20,8 @@ def get_size(dir_path: str):
 
 
 def cache_mgmt():
-    st.header('Cache', divider='rainbow')
-    st.caption('Manage disk usage of cache')
+    st.header('Cache management', divider='rainbow')
+    st.caption('Manage disk usage of cached files')
 
     st.info(f"Cache storage is located at {os.path.join(os.getcwd(), 'src', 'webapp', 'cache')}", icon="ℹ️")
 
