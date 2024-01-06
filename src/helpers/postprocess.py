@@ -19,7 +19,7 @@ from src.datasets.s2_ts_cz_crop import S2TSCZCropDataset
 
 
 @export_to_tif
-def prediction2raster(prediction: np.ndarray, epsg: str, affine: list, export: bool = False,
+def prediction2raster(prediction: np.ndarray, epsg: int, affine: list, export: bool = False,
                       export_dir: str = '', export_name: str = '') -> (
         Tuple)[Union[rasterio.io.DatasetReader, rasterio.io.MemoryFile], str]:
     """
@@ -30,7 +30,7 @@ def prediction2raster(prediction: np.ndarray, epsg: str, affine: list, export: b
     prediction: np.ndarray
          array of shape [NUM CLASSES, HEIGHT, WIDTH] with class probabilities
                 or [HEIGHT, WIDTH] with proper top 1 labels
-    epsg: str
+    epsg: int
         epsg code of raster
     affine: list
         affine transform of raster
@@ -61,7 +61,7 @@ def prediction2raster(prediction: np.ndarray, epsg: str, affine: list, export: b
         w = prediction.shape[1]
         dtype = rasterio.float32
     else:
-        raise Exception(f'Prediction array must 2 or 3 dimensional')
+        raise Exception(f'Prediction array must 2 or 3 dimensional but is of dim {prediction.ndim}')
 
     profile = {'driver': 'GTiff', 'dtype': dtype, 'nodata': 0.0, 'width': w,
                'height': h, 'count': count,
@@ -375,7 +375,7 @@ def polygonize(prediction: Union[str, rasterio.io.MemoryFile, rasterio.io.Datase
 
 
 def homogenize(prediction: Union[str, rasterio.io.MemoryFile, rasterio.io.DatasetReader, np.ndarray],
-               vector_data_path: str, affine: list, epsg: str = 'epsg:32633',
+               vector_data_path: str, affine: list, epsg: str = 'epsg:32633', vector_epsg: str = 'epsg: 32633',
                array_out: bool = False, type_: str = 'hard') -> Union[gpd.GeoDataFrame, np.ndarray]:
     """
     Homogenize prediction using external vector data (LPIS)
@@ -420,7 +420,8 @@ def homogenize(prediction: Union[str, rasterio.io.MemoryFile, rasterio.io.Datase
     elif isinstance(prediction, np.ndarray):
         gdf = prediction2polygon_layer(prediction, affine, epsg)
         points = prediction2point_layer(prediction, affine, epsg) if type_ == 'soft' else None
-        bb = gdf.total_bounds
+        gdf_ = gdf.to_crs(vector_epsg)
+        bb = gdf_.total_bounds
         bbox = BoundingBox(*list(bb))
         shape = prediction.shape[-2:]
         transform = rasterio.Affine(affine[0][0], affine[1][0], affine[2][0],
@@ -429,6 +430,7 @@ def homogenize(prediction: Union[str, rasterio.io.MemoryFile, rasterio.io.Datase
         raise Exception('Unsupported type of input prediction')
 
     filtered_features = gpd.read_file(vector_data_path, bbox=shapely_box(bbox.left, bbox.bottom, bbox.right, bbox.top))
+    filtered_features = filtered_features.to_crs(epsg)
 
     # features.sindex
     # indices = features.sindex.query(shapely_box(bbox.left, bbox.bottom, bbox.right, bbox.top),
@@ -437,6 +439,9 @@ def homogenize(prediction: Union[str, rasterio.io.MemoryFile, rasterio.io.Datase
 
     filtered_features = filtered_features.reset_index()
     filtered_features['area_polygon'] = filtered_features['geometry'].area
+    #import hashlib
+    #filtered_features.loc[:, 'hash'] = filtered_features['geometry'].apply(
+    #    lambda x: hashlib.sha256(bytes(str(x), 'utf-8')).hexdigest())
 
     merged = gpd.overlay(filtered_features, gdf, how='intersection')
     merged['area'] = merged['geometry'].area
@@ -444,16 +449,26 @@ def homogenize(prediction: Union[str, rasterio.io.MemoryFile, rasterio.io.Datase
     kk = merged.groupby(['index', 'raster_val'], as_index=False)[['area', 'area_polygon']].agg({'area': 'sum',
                                                                                                 'area_polygon': ['sum',
                                                                                                                  'count']})
-    #cc = kk.groupby('index', as_index=False)[['area']].max()
-    cc = kk[(kk.raster_val > 0) | ((kk.raster_val == 0) & ((kk.area['sum'] / (kk.area_polygon['sum'] / kk.area_polygon['count'])) > 0.75))].groupby('index', as_index=False)[[('area', 'sum')]].max()
+    # cc = kk.groupby('index', as_index=False)[['area']].max()
+    cc = kk[(kk.raster_val > 0) | ((kk.raster_val == 0) & (
+                (kk.area['sum'] / (kk.area_polygon['sum'] / kk.area_polygon['count'])) > 0.75))].groupby('index',
+                                                                                                         as_index=False)[
+        [('area', 'sum')]].max()
 
     cc.columns = cc.columns.droplevel(1)
-    gg = cc[['index', 'area']].merge(filtered_features[['index', 'geometry']], on='index', how='inner')
+    #gg = cc[['index', 'area']].merge(filtered_features[['index', 'geometry', 'Legenda', 'hash']], on='index',
+    #                                 how='inner')
+    gg = cc[['index', 'area']].merge(filtered_features[['index', 'geometry']], on='index',
+                                     how='inner')
 
     kk.columns = kk.columns.droplevel(1)
-    uu = gg[['area', 'index', 'geometry']].merge(kk[['area', 'raster_val']], on='area', how='inner')
+    #uu = gg[['area', 'index', 'geometry', 'hash', 'Legenda']].merge(kk[['area', 'raster_val', 'index']],
+    #                                                                on=['area', 'index'], how='inner')
+    uu = gg[['area', 'index', 'geometry']].merge(kk[['area', 'raster_val', 'index']],
+                                                 on=['area', 'index'], how='inner')
 
     tt = gpd.GeoDataFrame(uu)
+    #return tt['hash'].values, tt['area'].values, tt['raster_val'].values, tt['Legenda'].values
     if type_ == 'hard':
         if array_out:
             shapes_ = tt[['geometry', 'raster_val']].values.tolist()
