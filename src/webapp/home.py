@@ -19,7 +19,7 @@ def home():
     """
     )
 
-    grid = gpd.read_file('src/webapp/data/s2_grid/grid.shp')
+    grid = gpd.read_file('src/webapp/cache/s2_grid/grid.shp')
     grid = grid.to_crs(4326)
     grid = grid.reset_index()
     try:
