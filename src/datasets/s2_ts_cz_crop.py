@@ -287,6 +287,11 @@ class S2TSCZCropDataset(tdata.Dataset):
                 create_train_test_split(self.folder)
                 self.meta_patch = self.meta_patch[
                     (self.meta_patch['Status'] == 'OK') & (self.meta_patch['set'] == set_type)]
+        else:
+            self.meta_patch = pd.read_json(os.path.join(folder, "metadata.json"), orient='records',
+                                           dtype={'ID_PATCH': 'int32',
+                                                  'time-series_length': 'int8',
+                                                  'crs': 'int16'})
 
         self.meta_patch.index = self.meta_patch["ID_PATCH"].astype(int)
         self.meta_patch.sort_index(inplace=True)
