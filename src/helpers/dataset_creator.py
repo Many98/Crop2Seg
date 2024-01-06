@@ -146,14 +146,9 @@ class DatasetCreator(object):
             # sanity check ... skip if there are already exported metadata (it means data should be also exported)
             if not self.for_inference and self.metadata[self.metadata['TILE'] == tile_name]['TILE'].shape[0] == 82 * 82:
                 continue
-            if self.for_inference and self.metadata[self.metadata['TILE'] == tile_name]['TILE'].shape[0] == 9 * 9:
-                if len(dates) == len(self.metadata.loc[id, 'dates-S2']):
+            if self.for_inference and self.metadata[self.metadata['TILE'] == tile_name]['TILE'].shape[0] == 10 * 10:
                     st.write('Time series already generated ... Skipping')
                     continue
-                else:
-                    self.metadata = pd.DataFrame(
-                        {'ID_PATCH': [], 'TILE': [], 'dates-S2': [], 'time-series_length': [],
-                         'crs': []})
 
             if self.download:
                 logging.info(f"DOWNLOADING TILES WITH NAME: {tile_name}")
@@ -201,13 +196,13 @@ class DatasetCreator(object):
                                       snow_cloud_cover, background_cover)
             else:
                 st.write(f'Generating patches...')
-                patches_s2, _ = self._patchify(time_series,
-                                               affine, patch_size=256)
-
+                patches_s2, _ = self._patchify(time_series[:, :-1, ...],
+                                               affine, patch_size=128)
+                del time_series
                 logging.info(f"SAVING TIME-SERIES DATA FOR TILE: {tile_name}")
                 st.write(f'Saving time series...')
                 patches_bool_map = np.ones((patches_s2.shape[0],), dtype=bool)
-                self._save_patches(patches_s2[:, :, :-1, ...], patches_bool_map, where=self.data_s2_path,
+                self._save_patches(patches_s2, patches_bool_map, where=self.data_s2_path,
                                    filename=f'S2', id=0)
                 del patches_s2
                 logging.info(f"UPDATING METADATA FOR PATCHES OF TILE: {tile_name}")
@@ -321,8 +316,8 @@ class DatasetCreator(object):
 
         """
         ts_progress_bar = st.progress(0, text=f'S2 time series for {tile_name} progress:   0%')
-        zip_progress_bar = st.progress(0, text=f'Unzipping S2 tiles:  {0}%')
         tile_progress_bar = st.progress(0, text=f'Tile progress 0%')
+        zip_progress_bar = st.progress(0, text=f'Unzipping S2 tiles:  {0}%')
         pp = 0
         for cloud, date in zip(clouds, dates):
             try:
@@ -345,9 +340,9 @@ class DatasetCreator(object):
                 logging.info(f'Exception occured {e}')
                 pp += 5
                 continue
-        ts_progress_bar.progress(1, text=f'S2 time series for {tile_name} progress:   100%')
-        zip_progress_bar.progress(1, text=f'Unzipping S2 tiles:  {100}%')
-        tile_progress_bar.progress(1, text=f'Tile progress 100%')
+        ts_progress_bar.progress(100, text=f'S2 time series for {tile_name} progress:   100%')
+        zip_progress_bar.progress(100, text=f'Unzipping S2 tiles:  {100}%')
+        tile_progress_bar.progress(100, text=f'Tile progress 100%')
 
     def _patchify(self, data: np.ndarray, affine: rasterio.Affine,
                   patch_size: int = 128) -> Tuple[np.ndarray, list]:
@@ -388,7 +383,7 @@ class DatasetCreator(object):
             cropped = data[..., 484:, :10496]
         else:
             coords = None
-            cropped = np.pad(data, ((0, 0), (0, 0), (0, 108), (0, 108)), 'constant')
+            cropped = np.pad(data, ((0, 0), (0, 0), (0, 182), (0, 182)), 'constant')
         return rearrange(cropped, '... (h h1) (w w1) -> (h w) ... h1 w1', h1=patch_size, w1=patch_size), \
             coords
 
