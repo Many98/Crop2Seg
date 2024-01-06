@@ -1,25 +1,20 @@
-
 import leafmap.foliumap as leafmap
 from folium import LatLngPopup
 from shapely.geometry import Point
 import geopandas as gpd
 import streamlit as st
 
+from src.webapp.get_data import get_s2_grid
+
 if 'patch' not in st.session_state:
     st.session_state['patch'] = None
 
 
 def home():
-    st.title("Crop2Seg demo")
+    st.header('Crop2Seg demo', divider='rainbow')
+    st.caption('Predict crop types for Czech republic using Sentinel-2 time-series :sunglasses:')
 
-    st.markdown(
-        """
-    Predict crop types for Czech republic using Sentinel-2 time-series
-
-    """
-    )
-
-    grid = gpd.read_file('src/webapp/cache/s2_grid/grid.shp')
+    grid = get_s2_grid('src/webapp', 11)
     grid = grid.to_crs(4326)
     grid = grid.reset_index()
     try:
