@@ -58,6 +58,7 @@ def vectorize(tif_path):
 
 def cropmap(year):
     st.header('Crop Map', divider='rainbow')
+    st.caption('Predictions will be exported in this map')
 
     # here how to export proj file because in lpis is not proj file and it is in krovak crs
     # with fiona.open(
