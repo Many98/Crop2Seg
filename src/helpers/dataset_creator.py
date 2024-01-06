@@ -115,9 +115,17 @@ class DatasetCreator(object):
                      'Snow_Cloud_Cover': [], 'TILE': [], 'dates-S2': [], 'time-series_length': [],
                      'crs': [], 'affine': [], 'Fold': [], 'Status': [], 'set': []})
         else:
-            self.metadata = pd.DataFrame(
-                {'ID_PATCH': [], 'TILE': [], 'dates-S2': [], 'time-series_length': [],
-                 'crs': []})
+            if os.path.isfile(os.path.join(self.out_path, 'metadata.json')):
+                self.metadata = pd.read_json(os.path.join(self.out_path, 'metadata.json'), orient='records',
+                                             dtype={'ID_PATCH': 'int32',
+                                                    'time-series_length': 'int16',
+                                                    'crs': 'int16',
+                                                    }
+                                             )
+            else:
+                self.metadata = pd.DataFrame(
+                    {'ID_PATCH': [], 'TILE': [], 'dates-S2': [], 'time-series_length': [],
+                     'crs': []})
 
     def __call__(self, tile_names=TILES, clouds=CLOUDS, dates=DATES, bounds=None, account=None, password=None,
                  *args, **kwargs):
@@ -138,9 +146,14 @@ class DatasetCreator(object):
             # sanity check ... skip if there are already exported metadata (it means data should be also exported)
             if not self.for_inference and self.metadata[self.metadata['TILE'] == tile_name]['TILE'].shape[0] == 82 * 82:
                 continue
-            if self.for_inference and self.metadata[self.metadata['TILE'] == tile_name]['TILE'].shape[0] == 12 * 12:
-                st.write('Time series already generated ... Skipping')
-                continue
+            if self.for_inference and self.metadata[self.metadata['TILE'] == tile_name]['TILE'].shape[0] == 9 * 9:
+                if len(dates) == len(self.metadata.loc[id, 'dates-S2']):
+                    st.write('Time series already generated ... Skipping')
+                    continue
+                else:
+                    self.metadata = pd.DataFrame(
+                        {'ID_PATCH': [], 'TILE': [], 'dates-S2': [], 'time-series_length': [],
+                         'crs': []})
 
             if self.download:
                 logging.info(f"DOWNLOADING TILES WITH NAME: {tile_name}")
@@ -189,10 +202,10 @@ class DatasetCreator(object):
             else:
                 st.write(f'Generating patches...')
                 patches_s2, _ = self._patchify(time_series,
-                                               affine, patch_size=183)
+                                               affine, patch_size=256)
 
                 logging.info(f"SAVING TIME-SERIES DATA FOR TILE: {tile_name}")
-                st.write(f'Saving time series... {patches_s2.shape} ')
+                st.write(f'Saving time series...')
                 patches_bool_map = np.ones((patches_s2.shape[0],), dtype=bool)
                 self._save_patches(patches_s2[:, :, :-1, ...], patches_bool_map, where=self.data_s2_path,
                                    filename=f'S2', id=0)
@@ -280,7 +293,8 @@ class DatasetCreator(object):
                                                                     'Background_Cover': 'float32',
                                                                     'time-series_length': 'int16',
                                                                     'crs': 'int16',
-                                                                    'Fold': 'int8'})
+                                                                    'Fold': 'int8'}
+                            )
 
     def _delete_tiles(self, tile_name: str) -> None:
         """
@@ -331,9 +345,9 @@ class DatasetCreator(object):
                 logging.info(f'Exception occured {e}')
                 pp += 5
                 continue
-        ts_progress_bar.progress(0, text=f'S2 time series for {tile_name} progress:   100%')
-        zip_progress_bar.progress(0, text=f'Unzipping S2 tiles:  {100}%')
-        tile_progress_bar.progress(0, text=f'Tile progress 100%')
+        ts_progress_bar.progress(1, text=f'S2 time series for {tile_name} progress:   100%')
+        zip_progress_bar.progress(1, text=f'Unzipping S2 tiles:  {100}%')
+        tile_progress_bar.progress(1, text=f'Tile progress 100%')
 
     def _patchify(self, data: np.ndarray, affine: rasterio.Affine,
                   patch_size: int = 128) -> Tuple[np.ndarray, list]:
@@ -374,8 +388,7 @@ class DatasetCreator(object):
             cropped = data[..., 484:, :10496]
         else:
             coords = None
-            cropped = data
-        # return rearrange(cropped, 't c (h h1) (w w1) -> (h w) t c h1 w1', h1=128, w1=128)
+            cropped = np.pad(data, ((0, 0), (0, 0), (0, 108), (0, 108)), 'constant')
         return rearrange(cropped, '... (h h1) (w w1) -> (h w) ... h1 w1', h1=patch_size, w1=patch_size), \
             coords
 
@@ -471,7 +484,8 @@ class DatasetCreator(object):
         for r in tqdm(rasters, desc="Loading rasters..."):
             time_series.append(r.read(bounds=bounds))
             done += 1
-            load_raster_progress.progress(min((done / len(dates)), 1.0), f'Loading into memory:  {min((done / len(dates)), 1.0) * 100}%')
+            load_raster_progress.progress(min((done / len(dates)), 1.0),
+                                          f'Loading into memory:  {round(min((done / len(dates)), 1.0) * 100)}%')
         logging.getLogger().disabled = False
 
         return np.stack(time_series, axis=0), bbox, affine, crs, file_names, dates
