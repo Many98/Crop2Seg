@@ -5,20 +5,23 @@
 import json
 
 import torch
+import torch.utils.data as data
 import numpy as np
-import pandas as pd
-from datetime import datetime
+from einops import rearrange
 import argparse
 import os
 
-import matplotlib.pyplot as plt
+import geopandas as gpd
+import pandas as pd
+import rasterio
 
-from src.learning.utils import get_model
-from src.visualization.visualize import show, plot_rgb, plot_lulc, plot_proba_mask
-from src.datasets.s2_ts_cz_crop import crop_cmap, unpatchify, labels, labels_short, \
-    labels_super_short, labels_super_short_2
+import streamlit as st
 
-user_device = 'cpu'
+
+from src.learning.utils import get_model, recursive_todevice
+from src.utils import pad_collate
+from src.helpers.postprocess import prediction2raster, polygonize
+from src.datasets.s2_ts_cz_crop import crop_cmap, labels_super_short, S2TSCZCropDataset
 
 parser = argparse.ArgumentParser()
 # Model parameters
@@ -26,7 +29,7 @@ parser.add_argument(
     "--model",
     default="utae",
     type=str,
-    help="Type of architecture to use. Can be one of: (utae/unet3d/timeunet)",
+    help="Type of architecture to use. Can be one of: (utae/unet3d/timeunet/wtae)",
 )
 ## U-TAE Hyperparameters
 parser.add_argument("--encoder_widths", default="[64,64,64,128]", type=str)
@@ -132,6 +135,12 @@ parser.add_argument("--ref_date", default="2018-09-01", type=str, help="Referenc
                                                                        " as difference between actual date and reference"
                                                                        " date. If you want to use absolute encoding"
                                                                        "using day of years use `--use_doy` flag")
+
+parser.add_argument("--add_linear", action='store_true',
+                    help="Whether to add linear transform to positional encoder")
+parser.add_argument("--max_temp",  default=None,
+                    type=int,
+                    help="Maximal length of time-series. Required only for unet_naive")
 parser.add_argument(
     "--fold",
     default=None,
@@ -173,14 +182,41 @@ list_args = ["encoder_widths", "decoder_widths", "out_conv"]
 parser.set_defaults(cache=False)
 
 
-def load_model(path, device):
+def get_config(year):
+    config = parser.parse_args()
+    for k, v in vars(config).items():
+        if k in list_args and v is not None:
+            v = v.replace("[", "")
+            v = v.replace("]", "")
+            config.__setattr__(k, list(map(int, v.split(","))))
+
+    # ---------------------------
+    config.batch_size = 1
+    config.use_doy = False
+    config.num_queries = 1
+    config.use_abs_rel_enc = False
+    config.add_ndvi = False
+    config.num_classes = 15  # 15 for s2tsczcrop
+    config.out_conv = [32, 15]
+    config.model = 'timeunet'
+    config.ref_date = f"{year - 1}-09-01"
+    # ---------------------------
+
+    assert config.num_classes == config.out_conv[
+        -1], f'Number of classes {config.num_classes} does not match number of' \
+             f' output channels {config.out_conv[-1]}'
+    assert config.conv_type in ['2d', 'depthwise_separable'], f'Parameter `conv_type` must be one of ' \
+                                                              f' [2d, depthwise_separable] but is {config.conv_type}'
+
+    return config
+
+
+def load_model(config, device):
     """
     loads model
     """
 
-    # TODO download model weights from zenodo
-    #   prepare config for model
-    state = torch.load('',
+    state = torch.load('data/inference/timeunet_v1_base/model.pth.tar',
                        map_location=torch.device(device))
     state_dict = state["state_dict"]
 
@@ -193,14 +229,13 @@ def load_model(path, device):
     return model
 
 
-def load_norm_values(norm_folder):
+def load_norm_values():
     """
     loads norm values
     """
 
-    # TODO download norm vals or it should be within repo
     with open(
-            os.path.join(norm_folder), "r"
+            os.path.join('data/inference/NORM_S2_patch.json'), "r"
     ) as file:
         normvals = json.loads(file.read())
 
@@ -215,113 +250,108 @@ def load_norm_values(norm_folder):
     return norm_values
 
 
-def get_dates_relative(times, ref_date):
-    """
-    Method returns array representing difference between date and `self.reference_date` i.e.
-    position of element within time-series is relative to  `self.reference_date`
-    """
-    ref_date = datetime(*map(int, ref_date.split("-")))
-    d = pd.DataFrame().from_dict(times, orient="index")
-    d = d[0].apply(
-        lambda x: (datetime(int(str(x)[:4]), int(str(x)[4:6]), int(str(x)[6:])) - ref_date
-        ).days
+def generate_prediction(device, year, dataset_folder, affine):
+
+    gdf_pred = None
+    if os.path.isfile(f'src/webapp/cache/prediction/prediction_{year}.shp'):
+        gdf_pred = gpd.read_file(f'src/webapp/cache/prediction/prediction_{year}.shp')
+        if not gdf_pred[gdf_pred['name'] == os.path.split(dataset_folder)[-1]].empty:
+            proba = rasterio.open(f'data/export/{os.path.split(dataset_folder)[-1]}.tif').read()[
+                0]  # this is just top1 prediction
+            st.write('Prediction already generated... Skipping')
+            return proba
+
+    config = get_config(year)
+
+    config.device = device
+
+    norm_values = load_norm_values()
+
+    dt_args = dict(
+        folder=dataset_folder,
+        norm=True,
+        norm_values=norm_values,
+        reference_date=config.ref_date,
+        channels_like_pastis=True,
+        use_doy=config.use_doy,
+        add_ndvi=config.add_ndvi,
+        use_abs_rel_enc=config.use_abs_rel_enc,
+        for_inference=True
     )
 
-    return d.values
+    dt_test = S2TSCZCropDataset(**dt_args, set_type='test', cache=config.cache)
 
+    collate_fn = lambda x: pad_collate(x, pad_value=config.pad_value, max_size=config.max_temp)
+    st.write('Reading time series...')
+    test_loader = data.DataLoader(
+        dt_test,
+        batch_size=config.batch_size,  # TODO set to 1
+        drop_last=False,
+        collate_fn=collate_fn,
+        # num_workers=0,
+        # persistent_workers=True
+    )
+    if device == 'cuda':
+        st.write('CUDA device detected.')
+        st.write('Target device: GPU')
+    else:
+        st.write('Target device: CPU')
 
-def get_dates_absolute(times):
-    """
-    Method returns array representing day of year for a date i.e.
-    position of element within time-series is absolute to with respect to actual year.
-    Using only 365 days long years
-    """
-    d = pd.DataFrame().from_dict(times, orient="index")
-    d = pd.to_datetime(d[0].astype(str), format='%Y%m%d').dt.dayofyear
+    st.write('Loading neural net...')
 
-    return d.values
-
-
-def load_preprocess_data(data, dates, norm_values):
-    pass
-
-
-if __name__ == '__main__':
-    config = parser.parse_args()
-    for k, v in vars(config).items():
-        if k in list_args and v is not None:
-            v = v.replace("[", "")
-            v = v.replace("]", "")
-            config.__setattr__(k, list(map(int, v.split(","))))
-
-    # ---------------------------
-    config.batch_size = 1
-    # config.out_conv = [32, 20]  #  here is num of out classes as in pretrained net
-    # config.num_classes = 16  #  added boundary class as 15th class
-    # config.out_conv = [32, 16]  #  added boundary class as 15th class
-    # config.ignore_index = 14  #  added boundary class as 15th class
-    config.use_doy = False
-    config.test_region = 'all'  # 'boundary' | 'interior'
-    config.num_queries = 1
-    config.use_abs_rel_enc = False
-    config.add_ndvi = False
-    config.temporal_dropout = 0.0
-    config.num_classes = 15  # 15 for s2tsczcrop
-    config.out_conv = [32, 15]
-    config.model = 'wtae'
-    # ---------------------------
-
-    assert config.num_classes == config.out_conv[
-        -1], f'Number of classes {config.num_classes} does not match number of' \
-             f' output channels {config.out_conv[-1]}'
-    assert config.conv_type in ['2d', 'depthwise_separable'], f'Parameter `conv_type` must be one of ' \
-                                                              f' [2d, depthwise_separable] but is {config.conv_type}'
-
-    model = load_model('',
-                       device=user_device)
-
-    norm_values = load_norm_values(
-        norm_folder='')
-
-    data = np.load('').astype(np.float32)
-    channels_order = [2, 1, 0, 4, 5, 6, 3, 7, 8, 9]
-    data = torch.from_numpy(data)[:, channels_order, ...]
-
-    # TODO maybe add ndvi
-
-    data = (data - norm_values['mean'][None, :, None, None]) / norm_values['std'][None, :, None, None]
-
-    with open('', 'r') as f:
-        dates = json.load(f)
-
-    dates = torch.from_numpy(get_dates_absolute(dates) if config.use_doy else
-                             get_dates_relative(dates, config.ref_date))
-
-    if config.use_abs_rel_enc:
-        dates2 = torch.from_numpy(get_dates_absolute(dates) if not config.use_doy else
-                                  get_dates_relative(dates, config.ref_date))
-
-    data = data[None, ...].to(user_device)
-    dates = dates[None, ...].to(user_device)
+    model = load_model(config, device)
 
     model.eval()
-    with torch.no_grad():
-        out = model(data.float(), batch_positions=dates.float())
+    t1 = []
+    proba = []
+    st.write('Starting inference...')
+    prediction_progress = st.progress(0, text=f'Generating raw prediction:  {0}%')
+    done = 0
+    for i, batch in enumerate(test_loader):
+        if device is not None:
+            batch = recursive_todevice(batch, device)
 
-    pred_ = torch.nn.Softmax(dim=1)(out.detach().cpu()).max(dim=1)
-    pred = pred_[1][0].cpu().numpy()
-    proba = pred_[0][0].cpu().numpy()
+            (x, dates) = batch
 
-    plot_lulc(pred, labels_super_short, crop_cmap())
-    plt.title('Prediction')
+        with torch.no_grad():
+            out = model(x, batch_positions=dates)
+            pred_ = torch.nn.Softmax(dim=1)(out.detach().cpu())
+            proba.append(pred_)
+            t1.append(pred_.max(dim=1)[1][0].cpu().numpy())
+            #proba.append(pred_[0][0].cpu().numpy())
+            done += 1
+            prediction_progress.progress(min((done / len(test_loader)), 1.0), f'Generating raw prediction:  {round(min((done / len(test_loader)), 1.0) * 100)}%')
 
-    plot_proba_mask(proba)
-    plt.title('Prediction confidence map')
+    st.write("Post-processing...")
+    t1 = np.stack(t1)
+    proba = np.stack(proba)
 
-    plot_rgb(data[0, 10, [2, 1, 0], ...].cpu().numpy())
-    plt.title(f'Satellite image ({"unknown date"})')
+    t1 = rearrange(t1, '(h w) ... h1 w1 -> ... (h h1) (w w1)', h1=128, w1=128, h=10, w=10)
+    proba = rearrange(proba, '(h w) ... h1 w1 -> ... (h h1) (w w1)', h1=128, w1=128, h=10, w=10)[0]
 
-    plt.show()
+    t1 = t1[..., :1098, :1098]
+    proba = proba[..., :1098, :1098]
 
-    print('done')
+    st.write("Exporting raster...")
+    try:
+        prediction2raster(proba, 32633, affine, export=True, export_dir='data/export',
+                          export_name=os.path.split(dataset_folder)[-1])
+    except:
+        del os.environ['PROJ_LIB']
+        prediction2raster(proba, 32633, affine, export=True, export_dir='data/export',
+                          export_name=os.path.split(dataset_folder)[-1])
+
+    st.write("Performing vectorization of raster layer...")
+    gdf = polygonize(proba, affine, type_='hard')
+
+    gdf.loc[:, 'name'] = os.path.split(dataset_folder)[-1]
+
+    if gdf_pred is not None:
+        gdf_pred = pd.concat([gdf_pred, gdf])
+    else:
+        gdf_pred = gdf
+
+    gdf_pred.to_file(f'src/webapp/cache/prediction/prediction_{year}.shp')
+
+    return proba
 
