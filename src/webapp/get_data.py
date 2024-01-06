@@ -29,7 +29,7 @@ def get_s2_shape(prefix: str):
         "https://github.com/justinelliotmeyers/Sentinel-2-Shapefile-Index.git")
 
 
-def grid_bounds(geom, parts=6):
+def grid_bounds(geom, parts=11):
     minx, miny, maxx, maxy = round(geom.bounds[0]), round(geom.bounds[1]), round(geom.bounds[2]), round(geom.bounds[3])
     gx, gy = np.linspace(minx, maxx, parts), np.linspace(miny, maxy, parts)
     grid = []
@@ -40,13 +40,13 @@ def grid_bounds(geom, parts=6):
     return grid
 
 
-def partition(geom, parts=6):
+def partition(geom, parts=11):
     prepared_geom = prep(geom)
     grid = list(filter(prepared_geom.intersects, grid_bounds(geom, parts)))
     return grid
 
 
-def generate_grid(prefix: str):
+def generate_grid(prefix: str, parts=11):
     if not os.path.isfile(
             os.path.join(prefix, 'cache/s2_grid/Sentinel-2-Shapefile-Index/sentinel_2_index_shapefile.shp')):
         get_s2_shape(prefix)
@@ -61,11 +61,39 @@ def generate_grid(prefix: str):
         pols = []
         tiles = []
         for _, row in grid_s2.iterrows():
-            pols.append(partition(row['geometry']))
-            tiles.append([row['Name']] * 25)
+            pols.append(partition(row['geometry'], parts))
+            tiles.append([row['Name']] * (parts - 1) ** 2)
         grid = gpd.GeoDataFrame(data={'tile': list(reduce(lambda x, y: x + y, tiles, []))},
                                 geometry=list(reduce(lambda x, y: x + y, pols, [])), crs='EPSG:32633')
         grid.to_file(os.path.join(prefix, 'cache/s2_grid/grid.shp'), driver='ESRI Shapefile')
+
+
+@st.cache_data
+def get_s2_grid(prefix: str, parts=11):
+    if not os.path.isfile(
+            os.path.join(prefix, 'cache/s2_grid/Sentinel-2-Shapefile-Index/sentinel_2_index_shapefile.shp')):
+        get_s2_shape(prefix)
+
+    grid_s2 = gpd.read_file(
+        os.path.join(prefix, 'cache/s2_grid/Sentinel-2-Shapefile-Index/sentinel_2_index_shapefile.shp'),
+        bbox=shapely_box(11.8, 48.48, 18.9, 51.12))
+    grid_s2 = grid_s2[grid_s2.Name.isin(['33UVS', '33UWS', '33UUR', '33UVR', '33UWR', '33UXR',
+                                         '33UYR', '33UUQ', '33UVQ', '33UWQ', '33UXQ', '33UYQ'])]
+    grid_s2 = grid_s2.to_crs(32633)
+
+    pols = []
+    tiles = []
+    for _, row in grid_s2.iterrows():
+        pols.append(partition(row['geometry'], parts))
+        tiles.append([row['Name']] * (parts - 1) ** 2)
+    grid = gpd.GeoDataFrame(data={'tile': list(reduce(lambda x, y: x + y, tiles, []))},
+                            geometry=list(reduce(lambda x, y: x + y, pols, [])), crs='EPSG:32633')
+    try:
+        shutil.rmtree(os.path.join(prefix, 'cache/s2_grid'))
+    except:
+        pass
+
+    return grid
 
 
 def get_LPIS(prefix, year):
@@ -144,7 +172,7 @@ def get_info(index):
 
 
 def get_ts(tilename, patch_id, bounds, year, start_dt, end_dt, account, password, cache=False):
-    temp_dir = f'src/webapp/cache/s2_patches/{tilename}_{patch_id}_{year}'
+    temp_dir = f'src/webapp/cache/s2_patches/{tilename}_{patch_id}_{year}_{start_dt}_{end_dt}'
     if not os.path.isdir(temp_dir):
         try:
             shutil.rmtree('src/webapp/cache/s2_patches/')
@@ -155,12 +183,7 @@ def get_ts(tilename, patch_id, bounds, year, start_dt, end_dt, account, password
 
     s2_data_dir = f'src/webapp/cache/s2_tiles/tmp_{tilename}_{year}'
 
-    # if os.path.isdir(s2_data_dir):
-    #    if len(os.listdir(s2_data_dir)) != 0:
-    #        download = False
-
     os.makedirs(s2_data_dir, exist_ok=True)
-    # TODO user should have properly set config mainly credentials for S2 API
 
     dc = DatasetCreator(output_dataset_path=temp_dir, features_path='',
                         tiles_path=s2_data_dir,
@@ -168,7 +191,7 @@ def get_ts(tilename, patch_id, bounds, year, start_dt, end_dt, account, password
                         download=download,
                         delete_source_tiles=False if cache else True)
     tiles = ['T' + tilename]
-    clouds = np.array([65, 65, 65, 65, 65, 45, 65, 65, 55, 55, 65, 65, 45, 45])
+    clouds = np.array([65, 65, 65, 65, 65, 45, 65, 65, 65, 65, 65, 65, 45, 45])
     dates = np.array([
         f'[{year - 1}-09-01T00:00:00.000Z TO {year - 1}-09-30T00:00:00.000Z]',
         f'[{year - 1}-10-01T00:00:00.000Z TO {year - 1}-10-31T00:00:00.000Z]',
@@ -185,8 +208,8 @@ def get_ts(tilename, patch_id, bounds, year, start_dt, end_dt, account, password
         f'[{year}-09-01T00:00:00.000Z TO {year}-09-30T00:00:00.000Z]',
         f'[{year}-10-01T00:00:00.000Z TO {year}-10-31T00:00:00.000Z]'
     ])
-    dates = dates[start_dt:end_dt+1]
-    clouds = clouds[start_dt:end_dt+1]
+    dates = dates[start_dt:end_dt + 1]
+    clouds = clouds[start_dt:end_dt + 1]
     try:
         dates = dc(tile_names=tiles, clouds=clouds, dates=dates, bounds=bounds, account=account,
                    password=password)
@@ -206,7 +229,5 @@ def get_ts(tilename, patch_id, bounds, year, start_dt, end_dt, account, password
                          f'Please create issue at https://github.com/Many98/Crop2Seg/issues')
                 st.error(f'Exception: {e}')
                 return
-    # TODO at the end delete all create files/dirs if not required caching
 
     return dates, temp_dir
-
