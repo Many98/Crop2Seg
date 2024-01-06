@@ -405,15 +405,14 @@ class LTAE(nn.Module):
 
         if positional_encoding:
             if use_doy:
-                # TODO change experiment  <utae_base_pastis_rel_enc_enhanced_doy>
-                '''
-                self.positional_encoder = AbsolutePositionalEncoder(
-                    self.d_model // n_head, repeat=n_head
-                )
-                '''
-                self.positional_encoder = PositionalEncoder(
-                    self.d_model // n_head, repeat=n_head, add_linear=add_linear
-                )
+                if add_linear:
+                    self.positional_encoder = PositionalEncoder(
+                        self.d_model // n_head, repeat=n_head, add_linear=add_linear
+                    )
+                else:
+                    self.positional_encoder = AbsolutePositionalEncoder(
+                        self.d_model // n_head, repeat=n_head
+                    )
             else:
                 self.positional_encoder = PositionalEncoder(
                     self.d_model // n_head, repeat=n_head, add_linear=add_linear
@@ -557,32 +556,24 @@ class LTAE4WTAE(nn.Module):
 
         if positional_encoding:
             if use_doy:
-                # TODO change experiment <wtae_multi_q_1_base_pastis_rel_enc_enhanced_doy>
-                '''
-                self.positional_encoder = AbsolutePositionalEncoder(
-                    self.d_model // n_head, repeat=n_head
-                )
-                '''
-
-                self.positional_encoder = PositionalEncoder(
-                    self.d_model // n_head, repeat=n_head, add_linear=add_linear
-                )
+                if add_linear:
+                    self.positional_encoder = PositionalEncoder(
+                        self.d_model // n_head, repeat=n_head, add_linear=add_linear
+                    )
+                else:
+                    self.positional_encoder = AbsolutePositionalEncoder(
+                        self.d_model // n_head, repeat=n_head
+                    )
 
             else:
                 self.positional_encoder = PositionalEncoder(
                     self.d_model // n_head, repeat=n_head, add_linear=add_linear
                 )
             if self.use_abs_rel_enc:
-                # TODO experiment  <wtae_multi_q_1_base_pastis_rel_doy_enhanced_enc>
-                '''
+
                 self.positional_encoder_abs = AbsolutePositionalEncoder(
                     self.d_model // n_head, repeat=n_head
                 )
-                '''
-                self.positional_encoder_abs = PositionalEncoder(
-                    self.d_model // n_head, repeat=n_head, add_linear=add_linear
-                )
-
         else:
             self.positional_encoder = None
 
