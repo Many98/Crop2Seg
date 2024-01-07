@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 from pathlib import Path
 import time
@@ -25,6 +26,12 @@ from src.webapp.cache_management import cache_mgmt
 from src.helpers.postprocess import homogenize
 
 from src.global_vars import ACCOUNT, PASSWORD
+
+if os.name == 'nt':
+    try:
+        os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
+    except:
+        pass
 
 st.set_page_config(page_title="Crop2Seg", layout="wide")
 
