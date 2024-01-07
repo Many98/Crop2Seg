@@ -4,6 +4,7 @@
 
 import os
 import zipfile
+import stat
 import shutil
 from functools import reduce
 import git
@@ -67,6 +68,16 @@ def generate_grid(prefix: str, parts=11):
                                 geometry=list(reduce(lambda x, y: x + y, pols, [])), crs='EPSG:32633')
         grid.to_file(os.path.join(prefix, 'cache/s2_grid/grid.shp'), driver='ESRI Shapefile')
 
+def rmtree(top):
+    for root, dirs, files in os.walk(top, topdown=False):
+        for name in files:
+            filename = os.path.join(root, name)
+            os.chmod(filename, stat.S_IWUSR)
+            os.remove(filename)
+        for name in dirs:
+            os.rmdir(os.path.join(root, name))
+    os.rmdir(top)  
+
 
 @st.cache_data
 def get_s2_grid(prefix: str, parts=11):
@@ -89,9 +100,12 @@ def get_s2_grid(prefix: str, parts=11):
     grid = gpd.GeoDataFrame(data={'tile': list(reduce(lambda x, y: x + y, tiles, []))},
                             geometry=list(reduce(lambda x, y: x + y, pols, [])), crs='EPSG:32633')
     try:
-        shutil.rmtree(os.path.join(prefix, 'cache/s2_grid'))
-    except:
-        pass
+        shutil.rmtree(os.path.join(os.getcwd(), 'src', 'webapp', 'cache', 's2_grid'))
+    except Exception as r:
+        try:
+            rmtree(os.path.join(os.getcwd(), 'src', 'webapp', 'cache', 's2_grid'))
+        except:
+            pass
 
     return grid
 
