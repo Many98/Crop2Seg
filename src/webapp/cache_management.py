@@ -53,31 +53,31 @@ def cache_mgmt():
                                 help='Delete LPIS cached data',
                                 disabled=sizes[0] < 0.00001
                                 )
-        st.session_state['lpis_del'] = delete_lpis
+        st.session_state['lpis_del'] = delete_lpis and sizes[0] >= 0.00001
 
         delete_prediction = st.toggle('Delete prediction', value=st.session_state['prediction_del'],
                                       help='Delete cached prediction data',
                                       disabled=sizes[1] < 0.00001
                                       )
-        st.session_state['prediction_del'] = delete_prediction
+        st.session_state['prediction_del'] = delete_prediction and sizes[1] >= 0.00001
 
         delete_patches = st.toggle('Delete S2 patches', value=st.session_state['s2_patches_del'] and sizes[2] >= 0.00001,
                                    help='Delete cached time series data',
                                    disabled=sizes[2] < 0.00001
                                    )
-        st.session_state['s2_patches_del'] = delete_patches
+        st.session_state['s2_patches_del'] = delete_patches and sizes[2] >= 0.00001
 
         delete_tiles = st.toggle('Delete S2 tiles', value=st.session_state['s2_tiles_del'],
                                  help='Delete cached Sentinel-2 tiles',
                                  disabled=sizes[3] < 0.00001
                                  )
-        st.session_state['s2_tiles_del'] = delete_tiles
+        st.session_state['s2_tiles_del'] = delete_tiles and sizes[3] >= 0.00001
 
         delete_rasters = st.toggle('Delete rasters', value=st.session_state['rasters_del'],
                                    help='Delete exported predictions in tif format',
                                    disabled=sizes[4] < 0.00001
                                    )
-        st.session_state['rasters_del'] = delete_rasters
+        st.session_state['rasters_del'] = delete_rasters and sizes[4] >= 0.00001
 
         remove_cache = st.button('Delete',
                                  help=f"Delete chosen cached files")
@@ -121,12 +121,12 @@ def cache_mgmt():
         width = 0.25
         for p, s, l in zip(x, sizes, labels):
             ax.bar(p, s, width, label=l)
-            ax.text(p-0.1, s+0.05, f'{round(s, 3)} GB', fontsize=4)
+            ax.text(p-0.1, s, f'{round(s, 3)} GB', fontsize=5)
 
         ax.set_xticks(x, labels)
         ax.set_ylabel("Size in GB", fontsize=6)
         ax.set_title('Cache disk usage', fontsize=6)
-        ax.legend(loc='upper left', ncols=3, fontsize=4)
+        ax.legend(ncols=3, fontsize=4)
 
         st.pyplot(fig, use_container_width=False)
 
