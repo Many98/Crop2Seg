@@ -4,6 +4,7 @@ import os
 import numpy as np
 import argparse
 import pprint
+import random
 
 import torch
 import torch.nn as nn
@@ -16,7 +17,8 @@ from src.datasets.s2_ts_cz_crop import S2TSCZCropDataset
 from src.datasets.pastis import PASTISDataset
 from src.learning.weight_init import weight_init
 from src.learning.smooth_loss import SmoothCrossEntropy2D
-from src.learning.utils import iterate, overall_performance, save_results, prepare_output, checkpoint, get_model
+from src.learning.utils import (iterate, overall_performance, save_results, prepare_output, checkpoint, get_model,
+                                model_characteristics)
 
 parser = argparse.ArgumentParser()
 # Model parameters
@@ -24,9 +26,9 @@ parser.add_argument(
     "--model",
     default="utae",
     type=str,
-    help="Type of architecture to use. Can be one of: (utae/unet3d/timeunet)",
+    help="Type of architecture to use. Can be one of: (utae/wtae/timeunet/unet3d/convlstm/uconvlstm)",
 )
-## U-TAE Hyperparameters
+## Model Hyperparameters
 parser.add_argument("--encoder_widths", default="[64,64,64,128]", type=str)
 parser.add_argument("--decoder_widths", default="[32,32,64,128]", type=str)
 parser.add_argument("--out_conv", default="[32, 15]")
@@ -48,16 +50,19 @@ parser.add_argument("--augment", action='store_true',
                     help="Whether to perform augmentation of S2TSCZCrop Dataset")
 parser.add_argument("--add_linear", action='store_true',
                     help="Whether to add linear transform to positional encoder")
-parser.add_argument("--add_boundary", action='store_true',
+parser.add_argument("--add_boundary_loss", action='store_true',
                     help="Whether to add boundary loss. i.e. model will segment crops and boundary")
 parser.add_argument("--get_affine", action='store_true',
                     help="Whether to return also affine transform")
+parser.add_argument("--max_temp", default=None,
+                    type=int,
+                    help="Maximal length of time-series. Required only for unet_naive")
 
 parser.add_argument(
     "--dataset",
-    default="s2tsczcrop",
+    default="s2tsczcrops",
     type=str,
-    help="Type of dataset to use. Can be one of: (s2tsczcrop/pastis)",
+    help="Type of dataset to use. Can be one of: (s2tsczcrops/pastis)",
 )
 
 # Set-up parameters
@@ -164,6 +169,8 @@ parser.add_argument("--seg_model", default='unet', type=str,
                     help="Model to use for segmentation")
 parser.add_argument("--temp_model", default='ltae', type=str,
                     help="Model to use for temporal encoding")
+parser.add_argument("--label_smoothing", default=0.0, type=float,
+                    help="Specifies amount of smoothing. (Default is  0.0 i.e. no label smoothing)")
 
 parser.add_argument(
     "--val_every",
@@ -233,6 +240,7 @@ def main(config):
         test_region = config.test_region
         batch_size = config.batch_size
         lr = config.lr
+        homogenize = config.get_affine
 
         if not finetuning:
             logging.info(f"LOADING STATE JSON FROM {os.path.join(config.weight_folder, 'conf.json')}")
@@ -242,6 +250,8 @@ def main(config):
                 config.update({"test_region": test_region})
                 config.update({"batch_size": batch_size})
                 config.update({"lr": lr})
+                config.update({'device': device})
+                config.update({'get_affine': homogenize})
 
         if not is_test_run and not finetuning:
             logging.info("RESUMING TRAINING...")
@@ -305,13 +315,13 @@ def main(config):
     if config.add_ndvi:
         config.input_dim += 1
 
-    collate_fn = lambda x: pad_collate(x, pad_value=config.pad_value)
+    collate_fn = lambda x: pad_collate(x, pad_value=config.pad_value, max_size=config.max_temp)
 
     train_folds, val_fold, test_fold = fold_sequence
 
     if not is_test_run:
         if config.augment:
-            transform = Transform(add_noise=False, crop=False, crop_size=64)
+            transform = Transform(add_noise=False, crop=True, crop_size=64)
         else:
             transform = None
 
@@ -319,6 +329,7 @@ def main(config):
             dt_train = PASTISDataset(**dt_args, folds=train_folds,
                                      # norm_folds=train_folds,
                                      set_type='train',
+                                     transform=transform,
                                      cache=config.cache)
         else:
             dt_train = S2TSCZCropDataset(**dt_args,
@@ -353,7 +364,7 @@ def main(config):
 
     val_loader = data.DataLoader(
         dt_val,
-        batch_size=config.batch_size,
+        batch_size=config.batch_size,  # TODO set to 1
         drop_last=True,
         collate_fn=collate_fn,
         # num_workers=1,
@@ -361,7 +372,7 @@ def main(config):
     )
     test_loader = data.DataLoader(
         dt_test,
-        batch_size=config.batch_size,
+        batch_size=config.batch_size,  # TODO set to 1
         drop_last=True,
         collate_fn=collate_fn,
         # num_workers=0,
@@ -399,7 +410,18 @@ def main(config):
         for name, p in model.out_conv.named_children():
             p.requires_grad = True
         '''
+        '''
+        model.apply(weight_init)
+        model_dict = model.state_dict()
+        pretrained_dict = {k: v for k, v in state_dict.items() if 'in_conv' in k or 'temporal_encoder' in k}
+        model_dict.update(pretrained_dict)
+        model.load_state_dict(model_dict)
 
+        for name, p in model.named_parameters():
+            p.requires_grad = False
+        for name, p in model.seg_model.named_parameters():
+            p.requires_grad = True
+        '''
         # --------------------------------
     else:
         if config.weight_folder:
@@ -413,6 +435,7 @@ def main(config):
 
     if not is_test_run:
         logging.info(f"TOTAL TRAINABLE PARAMETERS : {config.N_params}")
+        # model_characteristics(model, device='cuda')
         # print(model)
         """
         logging.info("Trainable layers:")
@@ -441,7 +464,7 @@ def main(config):
     weights[config.ignore_index] = 0
 
     criterion = nn.CrossEntropyLoss(weight=weights,
-                                    # label_smoothing=0.1
+                                    label_smoothing=config.label_smoothing
                                     )
 
     # -----------------------------------------------------------------------
@@ -592,9 +615,15 @@ if __name__ == "__main__":
 
     np.random.seed(config.rdm_seed)
     torch.manual_seed(config.rdm_seed)
+    random.seed(config.rdm_seed)
+    # torch.use_deterministic_algorithms(True)
+    # torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    # ---------------------------
+    # TODO unfortunately some operations like bilinear interpolation etc. are non-deterministic (backward pass on cuda tensor)
+    # https://pytorch.org/docs/stable/generated/torch.use_deterministic_algorithms.html#torch.use_deterministic_algorithms
+    # https://pytorch.org/docs/stable/notes/randomness.html
+    # https://github.com/open-mmlab/mmsegmentation/issues/255
 
     assert not config.finetune or not config.test, f'Use only one flag. Either `--finetune` or `--test`'
     assert os.path.isdir(config.dataset_folder), f'Path {config.dataset_folder} for dataset is not valid'
