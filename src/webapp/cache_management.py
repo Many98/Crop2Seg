@@ -115,13 +115,13 @@ def cache_mgmt():
 
     with col2:
 
-        fig, ax = plt.subplots(figsize=(7, 3))
+        fig, ax = plt.subplots(figsize=(5, 3))
 
         x = np.arange(len(labels))
         width = 0.25
         for p, s, l in zip(x, sizes, labels):
             ax.bar(p, s, width, label=l)
-            ax.text(p-0.1, s+0.3, f'{round(s, 3)} GB', fontsize=4)
+            ax.text(p-0.1, s+0.05, f'{round(s, 3)} GB', fontsize=4)
 
         ax.set_xticks(x, labels)
         ax.set_ylabel("Size in GB", fontsize=6)
