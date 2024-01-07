@@ -147,6 +147,21 @@ if 'run_pipeline' not in st.session_state:
 if 'locked' not in st.session_state:
     st.session_state['locked'] = False
 
+if 'lpis_del' not in st.session_state:
+    st.session_state['lpis_del'] = True
+
+if 'prediction_del' not in st.session_state:
+    st.session_state['prediction_del'] = False
+
+if 's2_patches_del' not in st.session_state:
+    st.session_state['s2_patches_del'] = True
+
+if 's2_tiles_del' not in st.session_state:
+    st.session_state['s2_tiles_del'] = False
+
+if 'rasters_del' not in st.session_state:
+    st.session_state['rasters_del'] = False
+
 if selected == 'Home':
     opts = {f'9-{st.session_state["year"] - 1}': 0, f'10-{st.session_state["year"] - 1}': 1,
             f'11-{st.session_state["year"] - 1}': 2, f'12-{st.session_state["year"] - 1}': 3,
