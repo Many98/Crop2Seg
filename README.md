@@ -7,47 +7,67 @@ We also want to provide standalone dataset for semantic segmentation of crop typ
 Finally we want to provide web application which can process Sentinel-2 data and perform semantic segmentation of crop types in automatic manner.
 
 ## Installation & requirements
-Project was implemented in Python 3.8 therefore it is recommended to use it. All required dependencies are listed in `requirements.txt` and `environment.yml` files.
+Project was implemented in Python 3.8 therefore it is recommended to use it (it will be installed automatically within conda environment). All required dependencies are listed in `requirements.txt` and `environment.yml` files.
+
 Note that we work with Sentinel-2 tiles and therefore all processings are very memory intensive. Especially dataset creation for training neural net requires at least 500GB of RAM.
 Provided web app was optimized to work with small amount of ram but it is recomended to use system with at least 8 GB of RAM. On the other hand we use cached storage which is located
 on directory (folder) where the repo is cloned and therefore to clone this repo choose directory with enough disk space (e.g. to store time series of length of 60 one needs at least 80 GB of disk space).
 
-### Cloning
+#### Steps:
 
-To clone repo you can use just
+1. ###### Clone repo
+    To clone repo you can use just
+    
+    -   ```bash
+        cd <path to directory with enough disk space>
+        git clone https://github.com/Many98/Crop2Seg.git 
+        ```
+    
+     optionally (on Windows) one can use
+    
+    -   [Github Desktop](https://desktop.github.com/)
 
--   ```bash
-    cd <path to directory with enough disk space>
-    git clone https://github.com/Many98/Crop2Seg.git 
-    ```
+        Default location of repo on Windows will be C:\Users\user\GitHub\Crop2Seg
 
-    optionally (on Windows) one can use
+2. ###### Configure virtual environment
 
--   [Github Desktop](https://desktop.github.com/)
-    Default location of repo on Windows will be C:\Users\<user>\GitHub\Crop2Seg
+    To avoid dependency conflicts when installing packages it is wise to use virtual environment  e.g. venv/anaconda.
+    We  recommend to use [miniconda](https://docs.conda.io/projects/miniconda/en/latest/)
+    
+    On Windows particularly this step can be problematic. It is needed to have properly configured PATH environment variable (check it in miniconda installation)
 
-### Installation of dependencies
+    After miniconda is installed proceeed in terminal with following
+    
+    ```bash
+    conda env create -f environment.yml
+     ```
+3. ###### Using environment
 
-To avoid dependency conflicts when installing packages it is wise to use virtual environment  e.g. venv/anaconda.
-We  recommend to use [miniconda](https://docs.conda.io/projects/miniconda/en/latest/)
+    Previous step created `ox` miniconda environment
 
-On Windows particularly this step can be problematic. It is needed to have properly configured PATH environment variable (check it in miniconda installation)
-
-After miniconda is installed proceeed in terminal with following
-
-```bash
- conda env create -f environment.yml
- ```
-
-Step above will create `ox` miniconda environment
-
-Use terminal and run (on windows use anaconda prompt)
-
-```bash
-    cd <path to Crop2Seg repo>
+    To launch conda environment use terminal with following commands (on windows use anaconda prompt)
+    
+    ```bash
     conda activate ox
-    streamlit run crop2seg.py
- ```
+     ```
+## App demo
+ Main script for application is `crop2seg.py`
+ App is currently not hosted on internet but one can run it on localhost with following:
+  
+```bash
+cd <path to directory with cloned repo>
+conda activate ox
+streamlit run crop2seg.py
+```
+
+ ![](https://raw.githubusercontent.com/Many98/Crop2Seg/main/data/demo/demo.gif)
+
+Web interface is created using streamlit and based on this [streamlit-template](https://github.com/giswqs/streamlit-template)
+
+#### Schema of processing pipeline
+
+![](https://raw.githubusercontent.com/Many98/Crop2Seg/main/data/demo/pipeline_schema.png)
+
 
 ## Models
 
@@ -83,24 +103,18 @@ NDVI Temporal profiles of all used crop types can be found [here](https://github
 #### Class Distribution
 ![](https://raw.githubusercontent.com/Many98/Crop2Seg/main/data/misc/class_distrib.png)
 
-## Automatic processing pipeline
 
-#### Demo (still WIP)
+## Generate dataset from scratch
 
-![](https://raw.githubusercontent.com/Many98/Crop2Seg/main/data/demo/demo.gif)
-
-Web interface is created using streamlit and based on this [streamlit-template](https://github.com/giswqs/streamlit-template)
-
-#### Schema of processing pipeline
-
-![](https://raw.githubusercontent.com/Many98/Crop2Seg/main/data/demo/pipeline_schema.png)
+TODO
 
 
-## Usage
+## Training/testing/inference
 
+Main script for model training/testing/finetuning etc. is `train.py`
+It has CLI interface implemented.
 
-### Script train.py
-Main script for model training/testing/finetuning etc.
+To find out how to use it run following command:
 
 ```bash
 $ python train.py --help
@@ -187,13 +201,8 @@ optional arguments:
                         Do validation only after that many epochs.
 ```
 
-### Script crop2seg.py
- Main script for web application
- 
- To run web app on localhost use: 
-```bash
-streamlit run crop2seg.py
-```
+
+
 
 
 
