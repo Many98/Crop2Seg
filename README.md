@@ -10,8 +10,10 @@ Finally we want to provide web application which can process Sentinel-2 data and
 Project was implemented in Python 3.8 therefore it is recommended to use it (it will be installed automatically within conda environment). All required dependencies are listed in `requirements.txt` and `environment.yml` files.
 
 Note that we work with Sentinel-2 tiles and therefore all processings are very memory intensive. Especially dataset creation for training neural net requires at least 500GB of RAM.
-Provided web app was optimized to work with small amount of ram but it is recomended to use system with at least 8 GB of RAM. On the other hand we use cached storage which is located
+Provided web app was optimized to work with small amount of ram but it is recomended to use system with at least 6 GB of (free) RAM. On the other hand we use cached storage which is located
 on directory (folder) where the repo is cloned and therefore to clone this repo choose directory with enough disk space (e.g. to store time series of length of 60 one needs at least 80 GB of disk space).
+
+We use [cesnet mirror](https://dhr1.cesnet.cz/) for downloading Sentinel-2 tiles. Please create an account before using demo app.
 
 #### Steps:
 
