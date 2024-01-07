@@ -3,12 +3,12 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - affine=2.3.0=py_0
-  - gdal=3.1.2=py38h172510d_0
-  - scikit-image=0.17.2=py38hc5bc63f_2
-  - scipy=1.6.2=py38h7b17777_0
-  - seaborn=0.11.0=0
-  - seaborn-base=0.11.0=py_0
+  - affine=2.3.0
+  - gdal=3.1.2
+  - scikit-image=0.17.2
+  - scipy=1.6.2
+  - seaborn=0.11.0
+  - seaborn-base=0.11.0
   - pip:
     - requests==2.31.0
     - shapely==2.0.2
