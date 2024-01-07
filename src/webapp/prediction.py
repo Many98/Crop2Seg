@@ -336,10 +336,9 @@ def generate_prediction(device, year, dataset_folder, affine):
     try:
         prediction2raster(proba, 32633, affine, export=True, export_dir='data/export',
                           export_name=os.path.split(dataset_folder)[-1])
-    except:
-        del os.environ['PROJ_LIB']
-        prediction2raster(proba, 32633, affine, export=True, export_dir='data/export',
-                          export_name=os.path.split(dataset_folder)[-1])
+    except Exception as e:
+        st.error(f'Error occured when exporting prediction raster ... Skipping')
+        st.error(f'Error: {e}')
 
     st.write("Performing vectorization of raster layer...")
     gdf = polygonize(proba, affine, type_='hard')

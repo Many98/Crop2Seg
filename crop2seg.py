@@ -5,6 +5,11 @@ from pathlib import Path
 import time
 import torch
 
+# this is workaround for PROJ_LIB error in rasterio
+# https://rasterio.readthedocs.io/en/latest/faq.html#why-can-t-rasterio-find-proj-db-rasterio-from-pypi-versions-1-2-0
+# https://github.com/rasterio/rasterio/issues/1850
+os.environ.pop('PROJ_LIB', None)
+
 import pandas as pd
 import geopandas as gpd
 
