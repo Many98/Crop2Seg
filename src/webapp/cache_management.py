@@ -3,8 +3,22 @@ import shutil
 import time
 import streamlit as st
 import matplotlib.pyplot as plt
-import seaborn as sns
 import numpy as np
+
+if 'lpis_del' not in st.session_state:
+    st.session_state['lpis_del'] = True
+
+if 'prediction_del' not in st.session_state:
+    st.session_state['prediction_del'] = False
+
+if 's2_patches_del' not in st.session_state:
+    st.session_state['s2_patches_del'] = True
+
+if 's2_tiles_del' not in st.session_state:
+    st.session_state['s2_tiles_del'] = False
+
+if 'rasters_del' not in st.session_state:
+    st.session_state['rasters_del'] = False
 
 
 def get_size(dir_path: str):
@@ -35,47 +49,60 @@ def cache_mgmt():
     col1, col2 = st.columns([0.15, 0.85])
 
     with col1:
-        delete_lpis = st.toggle('Delete LPIS', value=True and sizes[0] >= 0.00001,
+        delete_lpis = st.toggle('Delete LPIS', value=st.session_state['lpis_del'] and sizes[0] >= 0.00001,
                                 help='Delete LPIS cached data',
                                 disabled=sizes[0] < 0.00001
                                 )
-        delete_prediction = st.toggle('Delete prediction', value=False,
+        st.session_state['lpis_del'] = delete_lpis
+
+        delete_prediction = st.toggle('Delete prediction', value=st.session_state['prediction_del'],
                                       help='Delete cached prediction data',
                                       disabled=sizes[1] < 0.00001
                                       )
-        delete_patches = st.toggle('Delete S2 patches', value=True and sizes[2] >= 0.00001,
+        st.session_state['prediction_del'] = delete_prediction
+
+        delete_patches = st.toggle('Delete S2 patches', value=st.session_state['s2_patches_del'] and sizes[2] >= 0.00001,
                                    help='Delete cached time series data',
                                    disabled=sizes[2] < 0.00001
                                    )
-        delete_tiles = st.toggle('Delete S2 tiles', value=False,
+        st.session_state['s2_patches_del'] = delete_patches
+
+        delete_tiles = st.toggle('Delete S2 tiles', value=st.session_state['s2_tiles_del'],
                                  help='Delete cached Sentinel-2 tiles',
                                  disabled=sizes[3] < 0.00001
                                  )
+        st.session_state['s2_tiles_del'] = delete_tiles
 
-        delete_rasters = st.toggle('Delete rasters', value=False,
+        delete_rasters = st.toggle('Delete rasters', value=st.session_state['rasters_del'],
                                    help='Delete exported predictions in tif format',
                                    disabled=sizes[4] < 0.00001
                                    )
+        st.session_state['rasters_del'] = delete_rasters
 
         remove_cache = st.button('Delete',
                                  help=f"Delete chosen cached files")
 
         if remove_cache:
             try:
-                if delete_lpis:
+                if st.session_state['lpis_del']:
                     shutil.rmtree('src/webapp/cache/lpis')
+                    st.session_state['lpis_del'] = False
 
-                if delete_prediction:
+                if st.session_state['prediction_del']:
                     shutil.rmtree('src/webapp/cache/prediction')
+                    st.session_state['prediction_del'] = False
 
-                if delete_patches:
+                if st.session_state['s2_patches_del']:
                     shutil.rmtree('src/webapp/cache/s2_patches')
+                    st.session_state['s2_patches_del'] = False
 
-                if delete_tiles:
+                if st.session_state['s2_tiles_del']:
                     shutil.rmtree('src/webapp/cache/s2_tiles')
+                    st.session_state['s2_tiles_del'] = False
 
-                if delete_rasters:
+                if st.session_state['rasters_del']:
                     shutil.rmtree('data/export')
+                    st.session_state['rasters_del'] = False
 
                 st.success("Data deleted successfully.", icon="✅")
                 time.sleep(1)
