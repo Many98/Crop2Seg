@@ -159,11 +159,11 @@ def get_LPIS(prefix, year):
         pass
 
 
-def get_info(index):
+def get_info(index, prefix: str = 'src/webapp', parts=11):
     """
     returns tilename, patch_bounds
     """
-    grid = gpd.read_file('src/webapp/cache/s2_grid/grid.shp')
+    grid = get_s2_grid(prefix, parts)
     grid = grid.reset_index()
 
     patch = grid[grid['index'] == index]
