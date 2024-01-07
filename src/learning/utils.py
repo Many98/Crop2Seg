@@ -31,7 +31,6 @@ from src.backbones.timeunet import TimeUNet_v1, TimeUNet_v2
 from src.backbones.convgru import ConvGRU_Seg
 from src.backbones.convlstm import ConvLSTM_Seg
 from src.backbones.recunet import RecUNet
-#from src.backbones.fpn import FPNConvLSTM
 from src.backbones.wtae import WTAE
 #from src.backbones.etae import ETAE
 from src.backbones.unet import Unet_naive
