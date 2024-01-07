@@ -110,6 +110,15 @@ NDVI Temporal profiles of all used crop types can be found [here](https://github
 
 TODO
 
+## Downloading Sentinel-2 data
+
+One can use CLI in `sentinel_cli.py`.
+
+To get help use:
+
+```bash
+python sentinel_cli.py --help
+```
 
 ## Training/testing/inference
 
