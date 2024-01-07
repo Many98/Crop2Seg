@@ -5,21 +5,6 @@ import streamlit as st
 import matplotlib.pyplot as plt
 import numpy as np
 
-if 'lpis_del' not in st.session_state:
-    st.session_state['lpis_del'] = True
-
-if 'prediction_del' not in st.session_state:
-    st.session_state['prediction_del'] = False
-
-if 's2_patches_del' not in st.session_state:
-    st.session_state['s2_patches_del'] = True
-
-if 's2_tiles_del' not in st.session_state:
-    st.session_state['s2_tiles_del'] = False
-
-if 'rasters_del' not in st.session_state:
-    st.session_state['rasters_del'] = False
-
 
 def get_size(dir_path: str):
     size = 0
@@ -61,7 +46,8 @@ def cache_mgmt():
                                       )
         st.session_state['prediction_del'] = delete_prediction and sizes[1] >= 0.00001
 
-        delete_patches = st.toggle('Delete S2 patches', value=st.session_state['s2_patches_del'] and sizes[2] >= 0.00001,
+        delete_patches = st.toggle('Delete S2 patches',
+                                   value=st.session_state['s2_patches_del'] and sizes[2] >= 0.00001,
                                    help='Delete cached time series data',
                                    disabled=sizes[2] < 0.00001
                                    )
@@ -112,7 +98,6 @@ def cache_mgmt():
                 st.error(
                     f"Error occured when deleting cache: {e}")
 
-
     with col2:
 
         fig, ax = plt.subplots(figsize=(5, 3))
@@ -121,7 +106,7 @@ def cache_mgmt():
         width = 0.25
         for p, s, l in zip(x, sizes, labels):
             ax.bar(p, s, width, label=l)
-            ax.text(p-0.1, s, f'{round(s, 3)} GB', fontsize=5)
+            ax.text(p - 0.1, s, f'{round(s, 3)} GB', fontsize=5)
 
         ax.set_xticks(x, labels)
         ax.set_ylabel("Size in GB", fontsize=6)
@@ -129,5 +114,3 @@ def cache_mgmt():
         ax.legend(ncols=3, fontsize=4)
 
         st.pyplot(fig, use_container_width=False)
-
-
