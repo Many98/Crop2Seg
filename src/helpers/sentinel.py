@@ -136,7 +136,7 @@ def sentinel_query(polygon, opensearch_uri=OPENSEARCH_URI, count=5, account=ACCO
 
     keywords = create_keywords(polygon, **kwargs)
 
-    query_parts = ['search?q=(' + keywords + ')', 'format=JSON', f'rows={100}']
+    query_parts = ['search?q=(' + keywords + ')', 'format=json', f'rows={100}']
     query_full = "&".join(query_parts)
 
     url = urljoin(opensearch_uri, query_full)
@@ -164,14 +164,31 @@ def sentinel_query(polygon, opensearch_uri=OPENSEARCH_URI, count=5, account=ACCO
                 _ = [j for j in json_feed['entry'][i]['str'] if j['name'] == 'processinglevel']
                 tile_type = _[0]['content'][-2:]
                 tile_type_list.append('L1C' if tile_type == '1C' else 'L2A' if tile_type == '2A' else 'other')
+
                 _ = [j for j in json_feed['entry'][i]['str'] if j['name'] == 'size']
                 size = _[0]['content'].split(' ')
                 size_list.append(float(size[0]) if size[1] == 'MB' else float(size[0]) * 1000)
-                _ = [j for j in json_feed['entry'][i]['double'] if j['name'] == 'cloudcoverpercentage']
-                cloud_percentage_list.append(float(_[0]['content']))
-                _ = [j for j in json_feed['entry'][i]['double'] if j['name'] == 'snowicepercentage']
-                snow_percentage_list.append(float(_[0]['content']))
+
+                try:
+                    
+                    ccp = json_feed['entry'][i]['double']
+                    if ccp['name']  == "cloudcoverpercentage":
+                        cloud_percentage_list.append(float(ccp['content']))
+
+                except:
+                    logging.info(f"Cloud percentage not found for {entry['id']}. Setting to 0. It is possible change in json")
+                    cloud_percentage_list.append(0)
+
+                try:
+                    _ = [j for j in json_feed['entry'][i]['double'] if j['name'] == 'snowicepercentage']
+                    snow_percentage_list.append(float(_[0]['content']))
+                except:
+                    logging.info(f"Snow percentage not found for {entry['id']}. Setting to 0. It is possible change in response json")
+                    snow_percentage_list.append(0)
+
+
                 id_list.append(entry['id'])
+
                 title_list.append(json_feed['entry'][i]['title'])
 
             df = pd.DataFrame(list(zip(title_list, id_list, tile_type_list, cloud_percentage_list, snow_percentage_list,
@@ -1422,3 +1439,12 @@ def time_series_s2(count, producttype='S2MSI1C', path_to_save=SENTINEL_PATH_DATA
                 logging.info(e.__str__())
                 logging.info(f'Skipping date:tile {date}:{tile}')
                 continue
+
+
+if __name__ == "__main__":
+
+    import re
+    polygon = '[[14.31, 49.44], [13.89, 50.28], [15.55, 50.28]]'
+    a = re.findall("\d+\.\d+", polygon)
+    b = np.array([[a[2 * i], a[2 * i + 1]] for i in range(len(a) // 2)])
+    sentinel(b, "T33UVQ", cloudcoverpercentage='[0 TO 20]', count=1)
