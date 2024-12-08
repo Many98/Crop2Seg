@@ -112,12 +112,47 @@ TODO
 
 ## Downloading Sentinel-2 data
 
-One can use CLI in `sentinel_cli.py`.
+One can use CLI in `sentinel_cli.py`. It requires only subset of dependencies specified either in `requirements_sentinel.txt` or `environment_sentinel.yml`
 
 To get help use:
 
 ```bash
-python sentinel_cli.py --help
+$ python sentinel_cli.py --help
+
+usage: sentinel_cli.py [-h] [--download] [--path PATH] [--platform PLATFORM] [--count COUNT] [--polygon POLYGON] [--filename FILENAME] [--product PRODUCT] [--begin BEGIN] [--polarisation POLARISATION] [--sensor SENSOR]
+                       [--tilename TILENAME] [--cloud [CLOUD [CLOUD ...]]] [--s2timeseries]
+
+Basic operations with Sentinel-1 and Sentinel-2. See configuration file to set specific settingsCapabilities are:
+         1) downloading Sentinel-1 and Sentinel-2 data (also Sentinel-2 time-series see config)
+
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --download, -d        Whether to perform download. (default: False)
+  --path PATH, -pa PATH
+                        Path to the folder where Sentinel-1 and Sentinel-2 data will be downloaded (default: D:\sentinel)
+  --platform PLATFORM, -pl PLATFORM
+                        Specifies the name of missionCan be: * `Sentinel-1` * Sentinel-2` (default: Sentinel-2)
+  --count COUNT, -c COUNT
+                        Number of products to be downloaded (default: 4)
+  --polygon POLYGON, -p POLYGON
+                        Polygon defining Area of interest. E.g. `--polygon "[[14.31, 49.44], [13.89, 50.28], [15.55, 50.28]]"` (default: [[14.31, 49.44], [13.89, 50.28], [15.55, 50.28]])
+  --filename FILENAME, -f FILENAME
+                        Filename of product to be downloaded (default: None)
+  --product PRODUCT, -pr PRODUCT
+                        Specifies the type of product of particular Sentinel mission.For Sentinel_1 : * 'SLC' * 'GRD'For Sentinel_2 : * 'S2MSI2A' (in other parts code this is referred as 'L2A') * 'S2MSI1C' (in other parts code this is referred as 'L1C')If None then both (all)
+                        product types will be downloaded (but only if 'filename' parameter is not used (set to None)) (default: S2MSI2A)
+  --begin BEGIN, -b BEGIN
+                        Specifies sensing start date (Specifies interval e.g. `--begin "[NOW-30DAYS TO NOW]"`)To download Sentinel-2 time series use --s2_time_series argument (default: [NOW-30DAYS TO NOW])
+  --polarisation POLARISATION, -pol POLARISATION
+                        Specifies the polarisation mode of Sentinel 1 radar.Can be: * 'HH' * 'VV' * 'HV' * 'VH' * 'HH HV' * 'VV VH' (default: VV VH)
+  --sensor SENSOR, -s SENSOR
+                        Specifies the sensor operational mode of Sentinel 1 radar.Can be: * 'SM' * 'IW' (usually used) * 'EW' * 'WV' (default: IW)
+  --tilename TILENAME, -t TILENAME
+                        Specifies name of particular tile. e.g. `--tilename T33UWQ``This can be done instead of performing search based on 'polygon' parameter. (default: None)
+  --cloud [CLOUD [CLOUD ...]], -cl [CLOUD [CLOUD ...]]
+                        Specifies interval of allowed overall cloud coverage percentage of Sentinel-2 tile.E.g. `--cloud "[0 TO 5.5]"` is translated as [0 TO 5.5] for API used (default: ['[0 TO 5]'])
+  --s2timeseries, -ts   Whether to download whole time series of Sentinel-2 data.Works only with Sentinel-2.See configuration to set tiles, dates and cloud cover percentages (default: False)
 ```
 
 ## Training/testing/inference
