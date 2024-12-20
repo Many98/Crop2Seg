@@ -161,9 +161,12 @@ def sentinel_query(polygon, opensearch_uri=OPENSEARCH_URI, count=5, account=ACCO
                                'restrictive')
         if type(json_feed['entry']) is list:
             for i, entry in enumerate(json_feed['entry']):
-                _ = [j for j in json_feed['entry'][i]['str'] if j['name'] == 'processinglevel']
-                tile_type = _[0]['content'][-2:]
-                tile_type_list.append('L1C' if tile_type == '1C' else 'L2A' if tile_type == '2A' else 'other')
+                try:
+                    _ = [j for j in json_feed['entry'][i]['str'] if j['name'] == 'processinglevel']
+                    tile_type = _[0]['content'][-2:]
+                    tile_type_list.append('L1C' if tile_type == '1C' else 'L2A' if tile_type == '2A' else 'other')
+                except:
+                    tile_type_list.append('other')
 
                 _ = [j for j in json_feed['entry'][i]['str'] if j['name'] == 'size']
                 size = _[0]['content'].split(' ')
@@ -192,40 +195,47 @@ def sentinel_query(polygon, opensearch_uri=OPENSEARCH_URI, count=5, account=ACCO
                 title_list.append(json_feed['entry'][i]['title'])
 
             df = pd.DataFrame(list(zip(title_list, id_list, tile_type_list, cloud_percentage_list, snow_percentage_list,
-                                       size_list, [None] * len(id_list))),
-                              columns=['title', 'ids', 'types', 'clouds', 'snow', 'size', 'rank'])
+                                        size_list, [None] * len(id_list))),
+                                columns=['title', 'ids', 'types', 'clouds', 'snow', 'size', 'rank'])
 
-            logging.info(f"APPLYING SNOW COVER PERCENTAGE FILTER (<={MAX_SNOW}%)")
-            df = df[df['snow'] <= MAX_SNOW]
-            logging.info(f"LEFT {df.shape[0]}/{int(json_feed['opensearch:totalResults'])} TILE CANDIDATES")
+            if kwargs.get('platformname', '') == 'Sentinel-2':
 
-            if not df.empty:
-                # RANK THE PRODUCTS ACCORDING TO CLOUD PERCENTAGE AND SIZE
-                df['rank'] = df.apply(lambda x: rank(x['types'], x['clouds'], x['size']), axis=1)
-                df.sort_values('rank', ascending=False, inplace=True)
+                logging.info(f"APPLYING SNOW COVER PERCENTAGE FILTER (<={MAX_SNOW}%)")
+                df = df[df['snow'] <= MAX_SNOW]
+                logging.info(f"LEFT {df.shape[0]}/{int(json_feed['opensearch:totalResults'])} TILE CANDIDATES")
 
-            logging.info(f"APPLYING SIZE AND CLOUD COVER PERCENTAGE FILTERS (<={MAX_CLOUD}%)")
-            df = df[df['rank'] > 0.0]
-            logging.info(f"LEFT {df.shape[0]}/{int(json_feed['opensearch:totalResults'])} TILE CANDIDATES")
+                if not df.empty:
+                    # RANK THE PRODUCTS ACCORDING TO CLOUD PERCENTAGE AND SIZE
+                    df['rank'] = df.apply(lambda x: rank(x['types'], x['clouds'], x['size']), axis=1)
+                    df.sort_values('rank', ascending=False, inplace=True)
+
+                logging.info(f"APPLYING SIZE AND CLOUD COVER PERCENTAGE FILTERS (<={MAX_CLOUD}%)")
+                df = df[df['rank'] > 0.0]
+                logging.info(f"LEFT {df.shape[0]}/{int(json_feed['opensearch:totalResults'])} TILE CANDIDATES")
 
             id_list = df.head(count)['ids'].to_list()
             passed_indices = list(df.head(count).index)
 
         elif type(json_feed['entry']) is dict:
-            _type = [j for j in json_feed['entry']['str'] if j['name'] == 'processinglevel']
-            tile_type = _type[0]['content'][-2:]
-            _snow = [j for j in json_feed['entry']['double'] if j['name'] == 'snowicepercentage']
+            try:
+                _type = [j for j in json_feed['entry']['str'] if j['name'] == 'processinglevel']
+                tile_type = _type[0]['content'][-2:]
+                _snow = [j for j in json_feed['entry']['double'] if j['name'] == 'snowicepercentage']
+                _cloud = [j for j in json_feed['entry']['double'] if j['name'] == 'cloudcoverpercentage']
+                size_filter = MIN_SIZE_L1C if tile_type == 'L1C' else MIN_SIZE_L2A
+            except:
+                pass
+
             _size = [j for j in json_feed['entry']['str'] if j['name'] == 'size']
-            _cloud = [j for j in json_feed['entry']['double'] if j['name'] == 'cloudcoverpercentage']
             size = _size[0]['content'].split(' ')
-            size_filter = MIN_SIZE_L1C if tile_type == 'L1C' else MIN_SIZE_L2A
             size = float(size[0]) if size[1] == 'MB' else float(size[0]) * 1000
 
-            if float(_snow[0]['content']) <= MAX_SNOW and size >= size_filter and float(
-                    _cloud[0]['content']) <= MAX_CLOUD:
-                id_list.append(json_feed['entry']['id'])  # in this case only one id is in json_feed
-            else:
-                logging.info(f"SKIPPING DUE TO FILTER RESTRICTIONS")
+            if kwargs.get('platformname', '') == 'Sentinel-2':
+                if float(_snow[0]['content']) <= MAX_SNOW and size >= size_filter and float(
+                        _cloud[0]['content']) <= MAX_CLOUD:
+                    id_list.append(json_feed['entry']['id'])  # in this case only one id is in json_feed
+                else:
+                    logging.info(f"SKIPPING DUE TO FILTER RESTRICTIONS")
 
         total_results = int(json_feed['opensearch:totalResults'])
 
@@ -535,6 +545,8 @@ def sentinel(polygon=None, tile_name=None, count=4, platformname='Sentinel-2', p
                                 f"Possible values are ['S2MSI2A', 'S2MSI1C', None]")
 
         elif platformname == "Sentinel-1":
+            if producttype == 'S2MSI2A':
+                producttype = 'IW_SLC__1S'
             if sensoroperationalmode not in ['SM', 'IW', 'EW', 'WV', None]:
                 raise Exception(f"Invalid 'sensoroperationalmode' parameter [{sensoroperationalmode}] \n"
                                 f"Possible values are ['SM', 'IW', 'EW', 'WV', None]")
@@ -544,6 +556,10 @@ def sentinel(polygon=None, tile_name=None, count=4, platformname='Sentinel-2', p
 
             # DOWNLOAD SPECIFIED PRODUCTTYPE IN PARTICULAR PLATFORM
             # NONE MEANS TO DOWNLOAD ALL PRODUCT TYPES IN PARTICULAR PLATFORM
+            args = {'platformname': platformname, 'beginposition': beginposition, 'producttype': producttype,
+                        'sensoroperationalmode': sensoroperationalmode,  # PARAMETER SPECIFIC TO SENTINEL 1
+                        'polarisationmode': polarisationmode}
+            """
             if producttype in ['SLC', 'GRD', 'OCN', None]:
                 args = {'platformname': platformname, 'beginposition': beginposition, 'producttype': producttype,
                         'sensoroperationalmode': sensoroperationalmode,  # PARAMETER SPECIFIC TO SENTINEL 1
@@ -551,7 +567,7 @@ def sentinel(polygon=None, tile_name=None, count=4, platformname='Sentinel-2', p
             else:
                 raise Exception(f"Invalid 'producttype' parameter [{producttype}] \n"
                                 f"Possible values are ['SLC', 'GRD', 'OCN', None]")
-
+            """
             ###########################################
             # PERFORM SEARCH BASED ON                 #
             # PARTICULAR NAME OF FILE OF PRODUCT      #
@@ -1447,4 +1463,5 @@ if __name__ == "__main__":
     polygon = '[[14.31, 49.44], [13.89, 50.28], [15.55, 50.28]]'
     a = re.findall("\d+\.\d+", polygon)
     b = np.array([[a[2 * i], a[2 * i + 1]] for i in range(len(a) // 2)])
+    sentinel(b, platformname='Sentinel-1', count=1)
     sentinel(b, "T33UVQ", cloudcoverpercentage='[0 TO 20]', count=1)
